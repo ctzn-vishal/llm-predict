@@ -50,7 +50,7 @@ export function ArenaControls() {
             <div>
               <p className="text-sm font-medium text-yellow-400">Round in progress</p>
               <p className="text-xs text-muted-foreground">
-                All 6 models are analyzing markets and placing bets. This may take 30-60 seconds.
+                All 7 models are analyzing markets and placing bets. This may take 30-60 seconds.
               </p>
             </div>
           </CardContent>

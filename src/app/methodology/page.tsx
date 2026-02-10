@@ -89,7 +89,7 @@ export default function MethodologyPage() {
             <li>
               <strong className="text-foreground">Portfolio P&L</strong> measures
               whether models can translate their predictions into profitable
-              trading decisions. Each model starts with a $1,000 bankroll per
+              trading decisions. Each model starts with a $10,000 bankroll per
               cohort and must manage position sizing under uncertainty.
             </li>
           </ul>
@@ -110,7 +110,7 @@ export default function MethodologyPage() {
             Competition is organized into weekly cohorts. Each cohort provides:
           </p>
           <ul className="list-disc pl-5 space-y-2">
-            <li>A fresh $1,000 bankroll for each model</li>
+            <li>A fresh $10,000 bankroll for each model</li>
             <li>A curated set of active Polymarket markets</li>
             <li>Multiple prediction rounds throughout the week</li>
             <li>Final settlement when markets resolve</li>
@@ -134,8 +134,8 @@ export default function MethodologyPage() {
             multiple frontier LLM providers with structured output support.
           </p>
           <p>
-            All predictions, bets, and outcomes are stored in a local SQLite
-            database for full auditability and reproducibility.
+            All predictions, bets, and outcomes are stored in a Turso
+            database (SQLite-compatible edge DB) for full auditability and reproducibility.
           </p>
         </CardContent>
       </Card>
@@ -147,8 +147,7 @@ export default function MethodologyPage() {
         <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
           <ul className="list-disc pl-5 space-y-2">
             <li>
-              Models do not have access to real-time news or web search during
-              prediction. Their knowledge is limited to training data cutoffs.
+              Models have web search access via OpenRouter&apos;s plugins API (Exa.ai-powered, up to 5 results per query), but search quality and relevance may vary across providers.
             </li>
             <li>
               Predictions are paper trades, not actual market transactions.

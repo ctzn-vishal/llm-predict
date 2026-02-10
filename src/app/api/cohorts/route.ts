@@ -36,7 +36,7 @@ export async function POST() {
         tx
       );
 
-      // Create cohort_models for each of the 6 models with bankroll=10000
+      // Create cohort_models for each model (6 LLMs + ensemble) with bankroll=10000
       const models = await queryAll<ModelRow>("SELECT * FROM models", undefined, tx);
       for (const model of models) {
         await run(

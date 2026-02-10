@@ -61,7 +61,7 @@ export async function runRound(cohortId: string): Promise<RoundResult> {
     }
   );
 
-  // d. Get all 6 models
+  // d. Get all models (excluding ensemble)
   const models = await queryAll<ModelRow>("SELECT * FROM models WHERE id != 'ensemble'");
 
   // e. For each market, process all models in parallel

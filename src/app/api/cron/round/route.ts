@@ -20,7 +20,7 @@ async function ensureActiveCohort(): Promise<CohortRow> {
   const endDate = endOfISOWeek(now).toISOString();
 
   await transaction(async (tx) => {
-    await run("UPDATE cohorts SET status = 'completed' WHERE status = 'active'", undefined, tx);
+    await run("UPDATE cohorts SET status = 'settling' WHERE status = 'active'", undefined, tx);
     await run(
       "INSERT OR IGNORE INTO cohorts (id, start_date, end_date, status) VALUES (@id, @start_date, @end_date, 'active')",
       { id: cohortId, start_date: startDate, end_date: endDate },

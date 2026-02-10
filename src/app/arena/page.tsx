@@ -125,7 +125,7 @@ export default async function ArenaPage() {
               </p>
               <p className="text-sm font-mono mt-1">10:00 & 22:00 UTC daily</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Syncs markets, runs 6 models on 10-15 markets
+                Syncs markets, runs 7 models on 10-15 markets
               </p>
             </div>
             <div className="rounded-md border border-border p-3">

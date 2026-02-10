@@ -5,6 +5,7 @@ export const MODEL_COLORS: Record<string, { primary: string; bg: string; text: s
   "deepseek-v3.2":   { primary: "#FF6B35", bg: "bg-orange-500/10",  text: "text-orange-400"  },
   "kimi-k2.5":       { primary: "#EC4899", bg: "bg-pink-500/10",    text: "text-pink-400"    },
   "qwen-3":          { primary: "#06B6D4", bg: "bg-cyan-500/10",    text: "text-cyan-400"    },
+  "ensemble":        { primary: "#F59E0B", bg: "bg-amber-500/10",   text: "text-amber-400"   },
 };
 
 export const MODEL_LIST = [
@@ -14,4 +15,5 @@ export const MODEL_LIST = [
   { id: "deepseek-v3.2",   name: "DeepSeek V3.2",   provider: "DeepSeek",    emoji: "🔮" },
   { id: "kimi-k2.5",       name: "Kimi K2.5",        provider: "Moonshot AI", emoji: "🌙" },
   { id: "qwen-3",          name: "Qwen 3",           provider: "Alibaba",     emoji: "🐲" },
+  { id: "ensemble",        name: "Ensemble (Avg)",    provider: "Aggregate",   emoji: "🎯" },
 ] as const;

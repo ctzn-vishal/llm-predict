@@ -8,7 +8,7 @@ const PLACEHOLDER_STATS: ModelStats[] = MODEL_LIST.map((m) => ({
   provider: m.provider,
   avatar_emoji: m.emoji,
   color: "",
-  bankroll: 1000,
+  bankroll: 10000,
   total_pnl: 0,
   roi_pct: 0,
   brier_score: 0,
@@ -43,7 +43,7 @@ export default async function ModelsPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Models</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          6 frontier LLMs competing head-to-head on prediction markets
+          6 frontier LLMs + 1 ensemble competing on prediction markets
         </p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

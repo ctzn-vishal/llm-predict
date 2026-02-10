@@ -10,7 +10,7 @@ const PLACEHOLDER_STATS: ModelStats[] = MODEL_LIST.map((m) => ({
   provider: m.provider,
   avatar_emoji: m.emoji,
   color: "",
-  bankroll: 1000,
+  bankroll: 10000,
   total_pnl: 0,
   roi_pct: 0,
   brier_score: 0,
@@ -52,7 +52,7 @@ export default async function HomePage() {
       value: topModel ? `${topModel.avatar_emoji} ${topModel.display_name}` : "--",
       icon: Trophy,
     },
-    { label: "Cohorts", value: "1", icon: Layers },
+    { label: "Cohorts", value: "--", icon: Layers },
     { label: "Active Markets", value: "--", icon: TrendingUp },
     { label: "Total Bets", value: totalBets.toLocaleString(), icon: BarChart3 },
   ];
@@ -62,7 +62,7 @@ export default async function HomePage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Leaderboard</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          6 frontier LLMs competing on real Polymarket prediction markets
+          7 models competing on real Polymarket prediction markets
         </p>
       </div>
 

@@ -10,6 +10,7 @@ import {
   Bot,
   BookOpen,
   TrendingUp,
+  Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +22,7 @@ const NAV_ITEMS = [
   { href: "/rounds", label: "Rounds", icon: BarChart3 },
   { href: "/models", label: "Models", icon: Bot },
   { href: "/methodology", label: "Methodology", icon: BookOpen },
+  { href: "/about", label: "About", icon: Info },
 ];
 
 export function NavSidebar() {
@@ -59,7 +61,7 @@ export function NavSidebar() {
       </nav>
       <div className="border-t border-border px-4 py-3">
         <p className="text-xs text-muted-foreground">
-          6 LLMs competing on Polymarket
+          7 models competing on Polymarket
         </p>
       </div>
     </aside>
