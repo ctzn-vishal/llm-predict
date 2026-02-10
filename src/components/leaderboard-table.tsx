@@ -22,7 +22,7 @@ interface LeaderboardTableProps {
 }
 
 export function LeaderboardTable({ data }: LeaderboardTableProps) {
-  const [sortKey, setSortKey] = useState<SortKey>("bankroll");
+  const [sortKey, setSortKey] = useState<SortKey>("roi_pct");
   const [sortAsc, setSortAsc] = useState(false);
 
   function handleSort(key: SortKey) {
@@ -102,9 +102,9 @@ export function LeaderboardTable({ data }: LeaderboardTableProps) {
                   {m.roi_pct >= 0 ? "+" : ""}{fmtPct(m.roi_pct)}
                 </TableCell>
                 <TableCell className="font-mono">{fmtBrier(m.brier_score)}</TableCell>
-                <TableCell className="font-mono">{fmtPct(m.win_rate)}</TableCell>
+                <TableCell className="font-mono">{fmtPct(m.win_rate * 100)}</TableCell>
                 <TableCell className="font-mono">{m.total_bets}</TableCell>
-                <TableCell className="font-mono text-muted-foreground">{fmtPct(m.pass_rate)}</TableCell>
+                <TableCell className="font-mono text-muted-foreground">{fmtPct(m.pass_rate * 100)}</TableCell>
               </TableRow>
             );
           })}

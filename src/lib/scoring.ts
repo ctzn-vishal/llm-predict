@@ -52,7 +52,7 @@ export async function getLeaderboard(cohortId?: string): Promise<ModelStats[]> {
     LEFT JOIN markets mk ON mk.id = b.market_id
     LEFT JOIN cohort_models cm ON cm.model_id = m.id ${cohortId ? "AND cm.cohort_id = @cohort_id" : ""}
     GROUP BY m.id
-    ORDER BY total_pnl DESC`,
+    ORDER BY roi_pct DESC`,
     params
   );
 

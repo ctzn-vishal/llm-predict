@@ -269,10 +269,12 @@ export async function runRound(cohortId: string): Promise<RoundResult> {
     id: roundId,
   });
 
-  // Update cohort market count
+  // Update cohort market count (unique markets, not cumulative)
   await run(
-    "UPDATE cohorts SET market_count = market_count + @count WHERE id = @id",
-    { count: selectedMarkets.length, id: cohortId }
+    `UPDATE cohorts SET market_count = (
+      SELECT COUNT(DISTINCT market_id) FROM bets WHERE cohort_id = @id
+    ) WHERE id = @id`,
+    { id: cohortId }
   );
 
   // g. Return round data with all bets

@@ -135,12 +135,12 @@ export default async function ModelProfilePage({ params }: { params: Promise<{ i
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
         {[
-          { label: "Bankroll", value: fmtDollars(stats?.bankroll ?? 1000) },
+          { label: "Bankroll", value: fmtDollars(stats?.bankroll ?? 10000) },
           { label: "ROI", value: (stats?.roi_pct ?? 0) >= 0 ? `+${fmtPct(stats?.roi_pct ?? 0)}` : fmtPct(stats?.roi_pct ?? 0), color: (stats?.roi_pct ?? 0) >= 0 ? "text-emerald-400" : "text-red-400" },
           { label: "Brier Score", value: fmtBrier(stats?.brier_score ?? 0) },
-          { label: "Win Rate", value: fmtPct(stats?.win_rate ?? 0) },
+          { label: "Win Rate", value: fmtPct((stats?.win_rate ?? 0) * 100) },
           { label: "Total Bets", value: String(stats?.total_bets ?? 0) },
-          { label: "Pass Rate", value: fmtPct(stats?.pass_rate ?? 0) },
+          { label: "Pass Rate", value: fmtPct((stats?.pass_rate ?? 0) * 100) },
           { label: "Avg Confidence", value: fmtPct((stats?.avg_confidence ?? 0) * 100) },
         ].map((s) => (
           <Card key={s.label}>
