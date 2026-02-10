@@ -6,6 +6,8 @@ import { runRound } from "@/lib/prediction";
 import { syncMarkets } from "@/lib/polymarket";
 import { canAffordRound, getTotalSpent, getBudgetCap } from "@/lib/cost-tracker";
 
+export const maxDuration = 300;
+
 async function ensureActiveCohort(): Promise<CohortRow> {
   let cohort = await queryOne<CohortRow>(
     "SELECT * FROM cohorts WHERE status = 'active' LIMIT 1"

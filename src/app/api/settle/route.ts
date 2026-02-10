@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { settleMarkets } from "@/lib/settlement";
 
+export const maxDuration = 300;
+
 export async function POST() {
   try {
     const result = await settleMarkets();
