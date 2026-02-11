@@ -36,7 +36,7 @@ export async function getLeaderboard(cohortId?: string): Promise<ModelStats[]> {
       COUNT(CASE WHEN b.action != 'pass' THEN 1 END) AS total_bets,
       CASE
         WHEN COUNT(CASE WHEN b.settled = 1 AND b.action != 'pass' AND mk.resolved != 3 THEN 1 END) = 0 THEN 0
-        ELSE CAST(COUNT(CASE WHEN b.settled = 1 AND b.pnl > 0 AND mk.resolved != 3 THEN 1 END) AS REAL)
+        ELSE CAST(COUNT(CASE WHEN b.settled = 1 AND b.action != 'pass' AND b.pnl > 0 AND mk.resolved != 3 THEN 1 END) AS REAL)
           / COUNT(CASE WHEN b.settled = 1 AND b.action != 'pass' AND mk.resolved != 3 THEN 1 END)
       END AS win_rate,
       CASE

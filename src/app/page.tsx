@@ -23,27 +23,35 @@ const PLACEHOLDER_STATS: ModelStats[] = MODEL_LIST.map((m) => ({
   avg_difficulty: 0,
 }));
 
-async function fetchLeaderboard(): Promise<{ current: ModelStats[]; allTime: ModelStats[] }> {
+async function fetchLeaderboard(): Promise<{
+  current: ModelStats[];
+  allTime: ModelStats[];
+  cohort_count: number;
+  active_market_count: number;
+}> {
   try {
     const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"}/api/leaderboard`, {
       cache: "no-store",
     });
     if (!res.ok) throw new Error("API error");
     const data = await res.json();
+    const stats = data.leaderboard ?? data.current ?? data ?? PLACEHOLDER_STATS;
     return {
-      current: data.current ?? data ?? PLACEHOLDER_STATS,
-      allTime: data.allTime ?? data ?? PLACEHOLDER_STATS,
+      current: stats,
+      allTime: stats,
+      cohort_count: data.cohort_count ?? 0,
+      active_market_count: data.active_market_count ?? 0,
     };
   } catch {
-    return { current: PLACEHOLDER_STATS, allTime: PLACEHOLDER_STATS };
+    return { current: PLACEHOLDER_STATS, allTime: PLACEHOLDER_STATS, cohort_count: 0, active_market_count: 0 };
   }
 }
 
 export default async function HomePage() {
-  const { current, allTime } = await fetchLeaderboard();
+  const { current, allTime, cohort_count, active_market_count } = await fetchLeaderboard();
   const stats = allTime.length > 0 ? allTime : PLACEHOLDER_STATS;
 
-  const topModel = [...stats].sort((a, b) => b.bankroll - a.bankroll)[0];
+  const topModel = [...stats].sort((a, b) => b.roi_pct - a.roi_pct)[0];
   const totalBets = stats.reduce((s, m) => s + m.total_bets, 0);
 
   const heroCards = [
@@ -52,8 +60,8 @@ export default async function HomePage() {
       value: topModel ? `${topModel.avatar_emoji} ${topModel.display_name}` : "--",
       icon: Trophy,
     },
-    { label: "Cohorts", value: "--", icon: Layers },
-    { label: "Active Markets", value: "--", icon: TrendingUp },
+    { label: "Cohorts", value: cohort_count > 0 ? cohort_count.toLocaleString() : "--", icon: Layers },
+    { label: "Active Markets", value: active_market_count > 0 ? active_market_count.toLocaleString() : "--", icon: TrendingUp },
     { label: "Total Bets", value: totalBets.toLocaleString(), icon: BarChart3 },
   ];
 
