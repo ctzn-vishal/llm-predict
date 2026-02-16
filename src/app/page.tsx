@@ -3,6 +3,8 @@ import { LeaderboardTabs } from "@/components/leaderboard-tabs";
 import { MODEL_LIST } from "@/lib/models";
 import type { ModelStats } from "@/lib/schemas";
 import { Trophy, Layers, TrendingUp, BarChart3 } from "lucide-react";
+import { getLeaderboard } from "@/lib/scoring";
+import { queryOne } from "@/lib/db";
 
 const PLACEHOLDER_STATS: ModelStats[] = MODEL_LIST.map((m) => ({
   model_id: m.id,
@@ -32,19 +34,28 @@ async function fetchLeaderboard(): Promise<{
   active_market_count: number;
 }> {
   try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"}/api/leaderboard`, {
-      cache: "no-store",
-    });
-    if (!res.ok) throw new Error("API error");
-    const data = await res.json();
-    const stats = data.leaderboard ?? data.current ?? data ?? PLACEHOLDER_STATS;
+    const leaderboard = await getLeaderboard();
+
+    // Fetch summary stats
+    const summaryRow = await queryOne<{
+      cohort_count: number;
+      active_market_count: number;
+    }>(
+      `SELECT
+        (SELECT COUNT(*) FROM cohorts) AS cohort_count,
+        (SELECT COUNT(*) FROM markets WHERE resolved = 0) AS active_market_count`
+    );
+
+    const stats = leaderboard.length > 0 ? leaderboard : PLACEHOLDER_STATS;
+
     return {
       current: stats,
       allTime: stats,
-      cohort_count: data.cohort_count ?? 0,
-      active_market_count: data.active_market_count ?? 0,
+      cohort_count: summaryRow?.cohort_count ?? 0,
+      active_market_count: summaryRow?.active_market_count ?? 0,
     };
-  } catch {
+  } catch (error) {
+    console.error("Error fetching leaderboard:", error);
     return { current: PLACEHOLDER_STATS, allTime: PLACEHOLDER_STATS, cohort_count: 0, active_market_count: 0 };
   }
 }

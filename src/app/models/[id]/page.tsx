@@ -12,8 +12,9 @@ import {
 import { MODEL_COLORS, MODEL_LIST } from "@/lib/models";
 import { fmtDollars, fmtPct, fmtBrier, fmtDate } from "@/lib/format";
 import type { ModelStats, BetRow } from "@/lib/schemas";
-import { getCalibrationCurve, decomposeBrier } from "@/lib/scoring";
+import { getCalibrationCurve, decomposeBrier, getLeaderboard } from "@/lib/scoring";
 import { CalibrationChart } from "@/components/calibration-chart";
+import { queryAll } from "@/lib/db";
 
 interface ModelProfileData {
   stats: ModelStats | null;
@@ -21,27 +22,20 @@ interface ModelProfileData {
 }
 
 async function fetchModelProfile(id: string): Promise<ModelProfileData> {
-  const base = process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000";
   try {
-    const [lbRes, betsRes] = await Promise.all([
-      fetch(`${base}/api/leaderboard`, { cache: "no-store" }),
-      fetch(`${base}/api/models/${id}/bets`, { cache: "no-store" }),
+    const [statsList, bets] = await Promise.all([
+      getLeaderboard(),
+      queryAll<BetRow>(
+        "SELECT * FROM bets WHERE model_id = @model_id ORDER BY created_at DESC",
+        { model_id: id }
+      ),
     ]);
 
-    let stats: ModelStats | null = null;
-    if (lbRes.ok) {
-      const data = await lbRes.json();
-      const arr: ModelStats[] = data.allTime ?? data;
-      stats = arr.find((m) => m.model_id === id) ?? null;
-    }
-
-    let bets: BetRow[] = [];
-    if (betsRes.ok) {
-      bets = await betsRes.json();
-    }
+    const stats = statsList.find((m) => m.model_id === id) ?? null;
 
     return { stats, bets };
-  } catch {
+  } catch (error) {
+    console.error("Error fetching model profile:", error);
     return { stats: null, bets: [] };
   }
 }
