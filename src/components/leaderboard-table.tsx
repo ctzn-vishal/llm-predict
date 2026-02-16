@@ -15,7 +15,7 @@ import { MODEL_COLORS } from "@/lib/models";
 import { fmtDollars, fmtPct, fmtBrier } from "@/lib/format";
 import type { ModelStats } from "@/lib/schemas";
 
-type SortKey = "bankroll" | "roi_pct" | "brier_score" | "win_rate" | "total_bets" | "pass_rate";
+type SortKey = "bankroll" | "roi_pct" | "brier_score" | "win_rate" | "total_bets" | "pass_rate" | "resolved_bets";
 
 interface LeaderboardTableProps {
   data: ModelStats[];
@@ -53,9 +53,11 @@ export function LeaderboardTable({ data }: LeaderboardTableProps) {
           <TableRow>
             <TableHead className="w-12">#</TableHead>
             <TableHead>Model</TableHead>
+            <TableHead className="text-right">Endowment</TableHead>
             <TableHead className={headerClass} onClick={() => handleSort("bankroll")}>
               Bankroll{sortIcon("bankroll")}
             </TableHead>
+            <TableHead className="text-right">Returns</TableHead>
             <TableHead className={headerClass} onClick={() => handleSort("roi_pct")}>
               ROI %{sortIcon("roi_pct")}
             </TableHead>
@@ -66,7 +68,7 @@ export function LeaderboardTable({ data }: LeaderboardTableProps) {
               Win Rate{sortIcon("win_rate")}
             </TableHead>
             <TableHead className={headerClass} onClick={() => handleSort("total_bets")}>
-              Bets{sortIcon("total_bets")}
+              Bets (Res){sortIcon("total_bets")}
             </TableHead>
             <TableHead className={headerClass} onClick={() => handleSort("pass_rate")}>
               Pass %{sortIcon("pass_rate")}
@@ -97,13 +99,17 @@ export function LeaderboardTable({ data }: LeaderboardTableProps) {
                     </Badge>
                   </Link>
                 </TableCell>
+                <TableCell className="font-mono text-right text-muted-foreground">{fmtDollars(m.initial_bankroll)}</TableCell>
                 <TableCell className="font-mono font-semibold">{fmtDollars(m.bankroll)}</TableCell>
+                <TableCell className={`font-mono text-right ${m.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                  {m.total_pnl >= 0 ? "+" : ""}{fmtDollars(m.total_pnl)}
+                </TableCell>
                 <TableCell className={`font-mono ${m.roi_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                   {m.roi_pct >= 0 ? "+" : ""}{fmtPct(m.roi_pct)}
                 </TableCell>
                 <TableCell className="font-mono">{fmtBrier(m.brier_score)}</TableCell>
                 <TableCell className="font-mono">{fmtPct(m.win_rate * 100)}</TableCell>
-                <TableCell className="font-mono">{m.total_bets}</TableCell>
+                <TableCell className="font-mono">{m.total_bets} <span className="text-muted-foreground">({m.resolved_bets})</span></TableCell>
                 <TableCell className="font-mono text-muted-foreground">{fmtPct(m.pass_rate * 100)}</TableCell>
               </TableRow>
             );

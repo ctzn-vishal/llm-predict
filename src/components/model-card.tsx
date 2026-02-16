@@ -43,8 +43,17 @@ export function ModelCard({ model }: ModelCardProps) {
               </p>
             </div>
             <div>
-              <p className="text-muted-foreground text-xs">Brier</p>
               <p className="font-mono font-semibold">{fmtBrier(model.brier_score)}</p>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <p className="text-muted-foreground text-xs">Bets (Res)</p>
+              <p className="font-mono font-semibold">{model.total_bets} ({model.resolved_bets})</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs">Win Rate</p>
+              <p className="font-mono font-semibold">{fmtPct(model.win_rate * 100)}</p>
             </div>
           </div>
         </CardContent>

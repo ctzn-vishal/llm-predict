@@ -153,10 +153,33 @@ export async function settleMarkets(): Promise<SettleResult> {
       );
 
       // Add P&L back to bankroll (winnings added, losses already deducted at bet time)
-      await run(
-        "UPDATE cohort_models SET bankroll = bankroll + @pnl WHERE cohort_id = @cohort_id AND model_id = @model_id",
-        { pnl, cohort_id: bet.cohort_id, model_id: bet.model_id }
-      );
+      // FIX: We need to credit the principal (bet_amount) + PnL.
+      // Logic:
+      // - Validation: bet_amount was deducted at bet time.
+      // - Win: PnL is positive. We return bet_amount + PnL.
+      // - Loss: PnL is negative (-bet_amount). We return bet_amount + (-bet_amount) = 0.
+      // Wait, let's re-verify the PnL calculation in calculatePnL.
+      // calculatePnL returns pure profit/loss.
+      // If Win: PnL = bet * (odds - 1). Total back = bet + PnL.
+      // If Loss: PnL = -bet. Total back = bet + (-bet) = 0.
+      // So we should ALWAYS add back (bet_amount + pnl).
+      // If we only add PnL:
+      // - Win: Bankroll += Profit. Principal is lost. Incorrect.
+      // - Loss: Bankroll += -Bet. Principal lost twice. Incorrect.
+
+      if (bet.bet_amount != null) {
+        const creditAmount = bet.bet_amount + pnl;
+        await run(
+          "UPDATE cohort_models SET bankroll = bankroll + @amount WHERE cohort_id = @cohort_id AND model_id = @model_id",
+          { amount: creditAmount, cohort_id: bet.cohort_id, model_id: bet.model_id }
+        );
+      } else {
+        // Fallback if bet_amount is null (shouldn't happen for active bets)
+        await run(
+          "UPDATE cohort_models SET bankroll = bankroll + @pnl WHERE cohort_id = @cohort_id AND model_id = @model_id",
+          { pnl, cohort_id: bet.cohort_id, model_id: bet.model_id }
+        );
+      }
 
       settledCount++;
     }

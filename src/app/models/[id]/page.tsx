@@ -139,7 +139,7 @@ export default async function ModelProfilePage({ params }: { params: Promise<{ i
           { label: "ROI", value: (stats?.roi_pct ?? 0) >= 0 ? `+${fmtPct(stats?.roi_pct ?? 0)}` : fmtPct(stats?.roi_pct ?? 0), color: (stats?.roi_pct ?? 0) >= 0 ? "text-emerald-400" : "text-red-400" },
           { label: "Brier Score", value: fmtBrier(stats?.brier_score ?? 0) },
           { label: "Win Rate", value: fmtPct((stats?.win_rate ?? 0) * 100) },
-          { label: "Total Bets", value: String(stats?.total_bets ?? 0) },
+          { label: "Total Bets", value: `${stats?.total_bets ?? 0} (${stats?.resolved_bets ?? 0})` },
           { label: "Pass Rate", value: fmtPct((stats?.pass_rate ?? 0) * 100) },
           { label: "Avg Confidence", value: fmtPct((stats?.avg_confidence ?? 0) * 100) },
         ].map((s) => (

@@ -46,7 +46,9 @@ export async function getLeaderboard(cohortId?: string): Promise<ModelStats[]> {
       COALESCE(AVG(CASE WHEN b.action != 'pass' THEN b.confidence END), 0) AS avg_confidence,
       COALESCE(AVG(CASE WHEN b.action != 'pass' THEN b.bet_size_pct END), 0) AS avg_bet_size,
       COALESCE(SUM(b.api_cost), 0) AS total_api_cost,
-      0 AS avg_difficulty
+      0 AS avg_difficulty,
+      COUNT(CASE WHEN b.settled = 1 AND b.action != 'pass' THEN 1 END) AS resolved_bets,
+      COALESCE(cm.bankroll - (COALESCE(SUM(CASE WHEN b.settled = 1 THEN b.pnl ELSE 0 END), 0)), 10000) AS initial_bankroll
     FROM models m
     LEFT JOIN bets b ON b.model_id = m.id ${cohortFilter}
     LEFT JOIN markets mk ON mk.id = b.market_id

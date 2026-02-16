@@ -154,6 +154,8 @@ export interface ModelStats {
   avg_bet_size: number;
   total_api_cost: number;
   avg_difficulty: number;
+  resolved_bets: number;
+  initial_bankroll: number;
 }
 
 // === Brier Decomposition ===

@@ -21,6 +21,8 @@ const PLACEHOLDER_STATS: ModelStats[] = MODEL_LIST.map((m) => ({
   avg_bet_size: 0,
   total_api_cost: 0,
   avg_difficulty: 0,
+  resolved_bets: 0,
+  initial_bankroll: 10000,
 }));
 
 async function fetchLeaderboard(): Promise<{
