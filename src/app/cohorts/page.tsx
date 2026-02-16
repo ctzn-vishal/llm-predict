@@ -1,20 +1,18 @@
 import { CohortTimeline } from "@/components/cohort-timeline";
+import { queryAll } from "@/lib/db";
 import type { CohortRow } from "@/lib/schemas";
 
-async function fetchCohorts(): Promise<CohortRow[]> {
-  try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"}/api/cohorts`, {
-      cache: "no-store",
-    });
-    if (!res.ok) return [];
-    return await res.json();
-  } catch {
-    return [];
-  }
+export const dynamic = "force-dynamic";
+
+async function getCohorts(): Promise<CohortRow[]> {
+  const cohorts = await queryAll<CohortRow>(
+    "SELECT * FROM cohorts ORDER BY start_date DESC"
+  );
+  return cohorts;
 }
 
 export default async function CohortsPage() {
-  const cohorts = await fetchCohorts();
+  const cohorts = await getCohorts();
 
   return (
     <div className="space-y-8">

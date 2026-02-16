@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -12,6 +12,8 @@ import {
 import { MODEL_COLORS, MODEL_LIST } from "@/lib/models";
 import { fmtDollars, fmtPct, fmtBrier, fmtDate } from "@/lib/format";
 import type { ModelStats, BetRow } from "@/lib/schemas";
+import { getCalibrationCurve, decomposeBrier } from "@/lib/scoring";
+import { CalibrationChart } from "@/components/calibration-chart";
 
 interface ModelProfileData {
   stats: ModelStats | null;
@@ -42,47 +44,6 @@ async function fetchModelProfile(id: string): Promise<ModelProfileData> {
   } catch {
     return { stats: null, bets: [] };
   }
-}
-
-function CalibrationPlaceholder() {
-  const buckets = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
-
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium">Calibration Chart</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="relative h-64 w-full">
-          {/* Grid lines */}
-          <div className="absolute inset-0 grid grid-cols-9 gap-0">
-            {buckets.map((b) => (
-              <div key={b} className="border-r border-border/30 last:border-r-0" />
-            ))}
-          </div>
-          {/* Diagonal (perfect calibration) */}
-          <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-            <line x1="0" y1="100" x2="100" y2="0" stroke="currentColor" strokeWidth="0.5" className="text-muted-foreground/30" strokeDasharray="4 4" />
-          </svg>
-          <div className="absolute inset-0 flex items-center justify-center">
-            <p className="text-xs text-muted-foreground">
-              Calibration data will appear after bets are settled
-            </p>
-          </div>
-          {/* X-axis labels */}
-          <div className="absolute -bottom-5 left-0 right-0 flex justify-between text-[10px] text-muted-foreground px-2">
-            <span>10%</span>
-            <span>50%</span>
-            <span>90%</span>
-          </div>
-        </div>
-        <div className="mt-6 flex items-center justify-between text-[10px] text-muted-foreground">
-          <span>Confidence bucket</span>
-          <span>Actual win rate</span>
-        </div>
-      </CardContent>
-    </Card>
-  );
 }
 
 function actionBadge(action: string) {
@@ -118,6 +79,29 @@ export default async function ModelProfilePage({ params }: { params: Promise<{ i
   const emoji = stats?.avatar_emoji ?? modelInfo?.emoji ?? "";
   const provider = stats?.provider ?? modelInfo?.provider ?? "";
 
+  // Prepare calibration data
+  const settledBets = bets.filter(b => b.settled === 1 && b.estimated_probability != null);
+  const calibrationInputs = settledBets.map(b => {
+    // Infer resolved_yes from PnL and Action
+    // Yes bet, positive PnL -> Yes
+    // Yes bet, negative PnL -> No
+    // No bet, positive PnL -> No (won on No)
+    // No bet, negative PnL -> Yes (lost on No)
+    let resolved_yes = false; // default
+    if (b.action === 'bet_yes') {
+      resolved_yes = b.pnl > 0;
+    } else if (b.action === 'bet_no') {
+      resolved_yes = b.pnl < 0;
+    }
+    return {
+      estimated_probability: b.estimated_probability!,
+      resolved_yes
+    };
+  });
+
+  const calibrationCurve = getCalibrationCurve(calibrationInputs);
+  const decomposition = decomposeBrier(calibrationInputs);
+
   return (
     <div className="space-y-8">
       <div>
@@ -152,7 +136,13 @@ export default async function ModelProfilePage({ params }: { params: Promise<{ i
         ))}
       </div>
 
-      <CalibrationPlaceholder />
+      <div className="h-[400px]">
+        <CalibrationChart
+          data={calibrationCurve}
+          brierScore={stats?.brier_score ?? 0}
+          decomposition={decomposition}
+        />
+      </div>
 
       <div>
         <h2 className="text-lg font-semibold mb-4">Bet History</h2>

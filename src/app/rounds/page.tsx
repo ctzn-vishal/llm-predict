@@ -1,21 +1,18 @@
 import { RoundFeed } from "@/components/round-feed";
+import { queryAll } from "@/lib/db";
 import type { RoundRow } from "@/lib/schemas";
 
-async function fetchRounds(): Promise<RoundRow[]> {
-  try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"}/api/rounds`, {
-      cache: "no-store",
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data) ? data : data.rounds ?? [];
-  } catch {
-    return [];
-  }
+export const dynamic = "force-dynamic";
+
+async function getRounds(): Promise<RoundRow[]> {
+  const rounds = await queryAll<RoundRow>(
+    "SELECT * FROM rounds ORDER BY created_at DESC LIMIT 50"
+  );
+  return rounds;
 }
 
 export default async function RoundsPage() {
-  const rounds = await fetchRounds();
+  const rounds = await getRounds();
 
   return (
     <div className="space-y-8">

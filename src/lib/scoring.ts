@@ -1,4 +1,4 @@
-import { queryAll } from "./db";
+import { queryAll, queryOne } from "./db";
 import type { ModelStats, MarketRow, BrierDecomposition } from "./schemas";
 import { detectCorrelation } from "./correlation";
 
@@ -215,8 +215,122 @@ export async function getAdjustedLeaderboard(
     adjustedPnlByModel.set(stat.model_id, adjustedPnl);
   }
 
+
   return stats.map(s => ({
     ...s,
     adjusted_pnl: adjustedPnlByModel.get(s.model_id) ?? s.total_pnl,
   }));
+}
+
+export interface CalibrationBucket {
+  bucket: string;
+  midpoint: number;
+  avgForecast: number;
+  winRate: number;
+  count: number;
+}
+
+/**
+ * Get calibration curve data for plotting.
+ */
+export function getCalibrationCurve(
+  bets: { estimated_probability: number; resolved_yes: boolean }[],
+  nBuckets = 10
+): CalibrationBucket[] {
+  const bucketSize = 1 / nBuckets;
+  const buckets: { forecasts: number[]; outcomes: boolean[] }[] = Array.from(
+    { length: nBuckets },
+    () => ({ forecasts: [], outcomes: [] })
+  );
+
+  for (const bet of bets) {
+    let bucketIdx = Math.floor(bet.estimated_probability / bucketSize);
+    if (bucketIdx >= nBuckets) bucketIdx = nBuckets - 1;
+    buckets[bucketIdx].forecasts.push(bet.estimated_probability);
+    buckets[bucketIdx].outcomes.push(bet.resolved_yes);
+  }
+
+  return buckets.map((b, i) => {
+    const low = i * bucketSize;
+    const high = (i + 1) * bucketSize;
+    const midpoint = (low + high) / 2;
+    const count = b.forecasts.length;
+
+    if (count === 0) {
+      return {
+        bucket: `${(low * 100).toFixed(0)}-${(high * 100).toFixed(0)}%`,
+        midpoint,
+        avgForecast: midpoint,
+        winRate: midpoint, // fallback
+        count: 0
+      };
+    }
+
+    const avgForecast = b.forecasts.reduce((s, v) => s + v, 0) / count;
+    const winRate = b.outcomes.filter(o => o).length / count;
+
+    return {
+      bucket: `${(low * 100).toFixed(0)}-${(high * 100).toFixed(0)}%`,
+      midpoint,
+      avgForecast,
+      winRate,
+      count
+    };
+  });
+}
+
+export interface PortfolioPoint {
+  date: string; // ISO date
+  bankroll: number;
+  pnl_change: number;
+}
+
+/**
+ * Get portfolio history for a model in a cohort.
+ */
+export async function getPortfolioHistory(
+  cohortId: string,
+  modelId: string
+): Promise<PortfolioPoint[]> {
+  const startBankroll = 10000;
+
+  // Get all settled bets for this model in this cohort
+  const bets = await queryAll<{ pnl: number; resolved_at: string; created_at: string }>(
+    `SELECT b.pnl, mk.resolved_at, b.created_at
+     FROM bets b
+     JOIN markets mk ON mk.id = b.market_id
+     WHERE b.model_id = @model_id 
+       AND b.cohort_id = @cohort_id 
+       AND b.settled = 1
+       AND mk.resolved_at IS NOT NULL
+     ORDER BY mk.resolved_at ASC`,
+    { model_id: modelId, cohort_id: cohortId }
+  );
+
+  const history: PortfolioPoint[] = [];
+  let currentBankroll = startBankroll;
+
+  const cohort = await queryOne<{ start_date: string }>(
+    "SELECT start_date FROM cohorts WHERE id = @id",
+    { id: cohortId }
+  );
+
+  if (cohort) {
+    history.push({
+      date: cohort.start_date,
+      bankroll: startBankroll,
+      pnl_change: 0
+    });
+  }
+
+  for (const bet of bets) {
+    currentBankroll += bet.pnl;
+    history.push({
+      date: bet.resolved_at,
+      bankroll: currentBankroll,
+      pnl_change: bet.pnl
+    });
+  }
+
+  return history;
 }

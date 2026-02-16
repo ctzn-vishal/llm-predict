@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LeaderboardTable } from "@/components/leaderboard-table";
 import { RoundFeed } from "@/components/round-feed";
+import { PortfolioChart } from "@/components/portfolio-chart";
 import { fmtDateShort } from "@/lib/format";
 import type { CohortRow, ModelStats, RoundRow } from "@/lib/schemas";
 
@@ -10,27 +10,29 @@ interface CohortDetailData {
   cohort: CohortRow | null;
   leaderboard: ModelStats[];
   rounds: RoundRow[];
+  timeline: { date: string;[key: string]: number | string }[];
 }
 
 async function fetchCohortDetail(id: string): Promise<CohortDetailData> {
   const base = process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000";
   try {
     const res = await fetch(`${base}/api/cohorts/${id}`, { cache: "no-store" });
-    if (!res.ok) return { cohort: null, leaderboard: [], rounds: [] };
+    if (!res.ok) return { cohort: null, leaderboard: [], rounds: [], timeline: [] };
     const data = await res.json();
     return {
       cohort: data.cohort ?? null,
       leaderboard: data.leaderboard ?? [],
       rounds: data.rounds ?? [],
+      timeline: data.timeline ?? [],
     };
   } catch {
-    return { cohort: null, leaderboard: [], rounds: [] };
+    return { cohort: null, leaderboard: [], rounds: [], timeline: [] };
   }
 }
 
 export default async function CohortDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { cohort, leaderboard, rounds } = await fetchCohortDetail(id);
+  const { cohort, leaderboard, rounds, timeline } = await fetchCohortDetail(id);
 
   if (!cohort) {
     return (
@@ -44,6 +46,12 @@ export default async function CohortDetailPage({ params }: { params: Promise<{ i
   }
 
   const isActive = cohort.status === "active";
+
+  const chartModels = leaderboard.map(m => ({
+    id: m.model_id,
+    name: m.display_name,
+    color: m.color
+  }));
 
   return (
     <div className="space-y-8">
@@ -70,6 +78,10 @@ export default async function CohortDetailPage({ params }: { params: Promise<{ i
         </p>
       </div>
 
+      <div className="h-[400px]">
+        <PortfolioChart data={timeline} models={chartModels} />
+      </div>
+
       <div>
         <h2 className="text-lg font-semibold mb-4">Leaderboard</h2>
         <LeaderboardTable data={leaderboard} />
@@ -82,3 +94,4 @@ export default async function CohortDetailPage({ params }: { params: Promise<{ i
     </div>
   );
 }
+
