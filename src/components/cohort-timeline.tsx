@@ -1,19 +1,18 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { fmtDateShort, fmtDollars } from "@/lib/format";
-import type { CohortRow, ModelStats } from "@/lib/schemas";
+import { fmtDateShort } from "@/lib/format";
+import type { CohortRow } from "@/lib/schemas";
 
 interface CohortTimelineProps {
   cohorts: CohortRow[];
-  leaderboards?: Record<string, ModelStats[]>;
 }
 
-export function CohortTimeline({ cohorts, leaderboards }: CohortTimelineProps) {
+export function CohortTimeline({ cohorts }: CohortTimelineProps) {
   if (cohorts.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground py-8 text-center">
-        No cohorts yet. The first cohort will be created when you run a round.
+      <p className="py-8 text-center text-sm text-muted-foreground">
+        No cohorts yet. The first cohort is created when you run a round.
       </p>
     );
   }
@@ -22,15 +21,13 @@ export function CohortTimeline({ cohorts, leaderboards }: CohortTimelineProps) {
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {cohorts.map((cohort) => {
         const isActive = cohort.status === "active";
-        const top3 = leaderboards?.[cohort.id]?.slice(0, 3) ?? [];
-
         return (
           <Link key={cohort.id} href={`/cohorts/${cohort.id}`}>
-            <Card className="transition-colors hover:bg-accent/30 h-full">
+            <Card className="h-full transition-colors hover:bg-accent/30">
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm font-medium">
-                    {fmtDateShort(cohort.start_date)} - {fmtDateShort(cohort.end_date)}
+                    {fmtDateShort(cohort.start_date)} – {fmtDateShort(cohort.end_date)}
                   </CardTitle>
                   <Badge
                     className={
@@ -43,25 +40,11 @@ export function CohortTimeline({ cohorts, leaderboards }: CohortTimelineProps) {
                   </Badge>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-3">
+              <CardContent>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground">
                   <span>{cohort.market_count} markets</span>
-                  <span>ID: {cohort.id.slice(0, 8)}</span>
+                  <span className="font-mono">{cohort.id}</span>
                 </div>
-                {top3.length > 0 && (
-                  <div className="space-y-1">
-                    {top3.map((m, i) => (
-                      <div key={m.model_id} className="flex items-center justify-between text-xs">
-                        <span>
-                          {["🥇", "🥈", "🥉"][i]} {m.avatar_emoji} {m.display_name}
-                        </span>
-                        <span className={`font-mono ${m.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                          {m.total_pnl >= 0 ? "+" : ""}{fmtDollars(m.total_pnl)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </CardContent>
             </Card>
           </Link>

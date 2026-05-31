@@ -2,27 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 import { queryAll, queryOne } from "@/lib/db";
 import type { RoundRow } from "@/lib/schemas";
 
-interface BetWithDetails {
+// One forecast row enriched with the forecaster's display metadata and the
+// market's question / crowd price / resolution state -- enough to render the
+// "blind probability vs crowd vs outcome" comparison for a round.
+interface ForecastWithDetails {
   id: number;
-  model_id: string;
-  market_id: string;
-  cohort_id: string;
   round_id: string;
-  action: string;
-  confidence: number | null;
-  bet_size_pct: number | null;
-  bet_amount: number | null;
-  estimated_probability: number | null;
-  market_price_at_bet: number | null;
+  cohort_id: string;
+  market_id: string;
+  forecaster_id: string;
+  forecaster_kind: string;
+  prob_yes: number | null;
   reasoning: string | null;
   key_factors: string | null;
-  settled: number;
-  pnl: number;
-  brier_score: number | null;
+  crowd_price: number | null;
+  ok: number;
+  error: string | null;
   api_cost: number;
   api_latency_ms: number;
+  settled: number;
+  outcome: number | null;
+  brier: number | null;
+  log_loss: number | null;
   created_at: string;
-  // joined model fields
+  // joined forecaster fields
   display_name: string;
   provider: string;
   avatar_emoji: string;
@@ -31,44 +34,42 @@ interface BetWithDetails {
   question: string;
   market_yes_price: number | null;
   market_resolved: number;
+  end_date: string | null;
 }
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id } = await params;
 
     const round = await queryOne<RoundRow>(
       "SELECT * FROM rounds WHERE id = @id",
-      { id }
+      { id },
     );
     if (!round) {
-      return NextResponse.json(
-        { error: `Round ${id} not found` },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: `Round ${id} not found` }, { status: 404 });
     }
 
-    const bets = await queryAll<BetWithDetails>(
+    const forecasts = await queryAll<ForecastWithDetails>(
       `SELECT
-        b.id, b.model_id, b.market_id, b.cohort_id, b.round_id,
-        b.action, b.confidence, b.bet_size_pct, b.bet_amount,
-        b.estimated_probability, b.market_price_at_bet,
-        b.reasoning, b.key_factors, b.settled, b.pnl, b.brier_score,
-        b.api_cost, b.api_latency_ms, b.created_at,
+        f.id, f.round_id, f.cohort_id, f.market_id, f.forecaster_id, f.forecaster_kind,
+        f.prob_yes, f.reasoning, f.key_factors, f.crowd_price,
+        f.ok, f.error, f.api_cost, f.api_latency_ms,
+        f.settled, f.outcome, f.brier, f.log_loss, f.created_at,
         m.display_name, m.provider, m.avatar_emoji, m.color,
-        mk.question, mk.yes_price AS market_yes_price, mk.resolved AS market_resolved
-      FROM bets b
-      JOIN models m ON m.id = b.model_id
-      JOIN markets mk ON mk.id = b.market_id
-      WHERE b.round_id = @round_id
+        mk.question, mk.yes_price AS market_yes_price,
+        mk.resolved AS market_resolved, mk.end_date
+      FROM forecasts f
+      JOIN models m ON m.id = f.forecaster_id
+      JOIN markets mk ON mk.id = f.market_id
+      WHERE f.round_id = @round_id
       ORDER BY mk.question, m.display_name`,
-      { round_id: id }
+      { round_id: id },
     );
 
-    return NextResponse.json({ round, bets });
+    return NextResponse.json({ round, forecasts });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

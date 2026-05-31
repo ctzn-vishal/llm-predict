@@ -1,77 +1,91 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { MODELS_ONLY } from "@/lib/models";
+
+const price = (n?: number) => (n == null ? "—" : `$${n.toFixed(n < 0.1 ? 3 : 2)}`);
 
 export default function AboutPage() {
   return (
     <div className="max-w-3xl space-y-8">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">About</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          An academic-grade benchmark where 7 models compete on real Polymarket prediction markets
+        <p className="mt-1 text-sm text-muted-foreground">
+          Six LLMs make blind forecasts on real prediction markets — then we ask whether pooling
+          them into an ensemble beats the crowd
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">The Problem with LLM Benchmarks</CardTitle>
+          <CardTitle className="text-lg">Why prediction markets</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
+        <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
           <p>
-            Traditional LLM benchmarks are contaminated by training data. Models can
-            memorize answers to MMLU, HumanEval, and other static datasets, making
-            scores increasingly meaningless as benchmarks leak into training corpora.
+            Traditional LLM benchmarks leak into training data. Models can memorize answers to MMLU,
+            HumanEval, and other static datasets, so scores drift further from genuine ability every
+            time a benchmark is scraped into a training corpus.
           </p>
           <p>
-            Prediction markets offer a fundamentally different approach: they test
-            <strong className="text-foreground"> genuine forecasting ability</strong> about
-            future events that cannot exist in any training corpus. When a model
-            predicts whether Bitcoin will exceed $150K by March 2026, there is no
-            training data to memorize &mdash; only reasoning, research, and calibration.
+            Prediction markets test something that cannot be memorized:{" "}
+            <strong className="text-foreground">forecasting a future that has not happened yet</strong>
+            . When a model estimates the probability that an event resolves YES next week, there is
+            no answer key to recall — only reasoning, research, and calibration.
+          </p>
+          <p>
+            But this project asks a sharper question than &ldquo;which model forecasts best?&rdquo;
+            It asks <strong className="text-foreground">how much you gain by combining them</strong>.
+            That is the entire point of the ensemble, and it only works if the individual forecasts
+            are genuinely independent.
           </p>
           <p className="text-xs">
             Inspired by{" "}
-            <a href="https://forecasterarena.com" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
+            <a
+              href="https://forecasterarena.com"
+              className="text-primary hover:underline"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               Forecaster Arena
-            </a>.
+            </a>
+            .
           </p>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">How It Works</CardTitle>
+          <CardTitle className="text-lg">How it works</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
-          <ol className="list-decimal pl-5 space-y-2">
+        <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
+          <ol className="list-decimal space-y-2 pl-5">
             <li>
-              A new <strong className="text-foreground">weekly cohort</strong> is
-              auto-created each Monday (e.g., 2026-W07). Every model gets a fresh
-              $10,000 virtual bankroll.
+              We pull <strong className="text-foreground">short-horizon</strong> binary markets from
+              Polymarket — mostly those resolving within about a week — so forecasts settle quickly
+              and the leaderboard reflects real outcomes, not open bets.
             </li>
             <li>
-              <strong className="text-foreground">Rounds run automatically</strong> twice
-              daily at 10:00 and 22:00 UTC. Each round presents 10-20 real Polymarket
-              questions to all 6 LLMs (plus a 7th ensemble).
+              Each model is shown only the market&apos;s question and description and asked for one
+              number: the probability of YES. Crucially it{" "}
+              <strong className="text-foreground">never sees the market price</strong>. A model that
+              could peek at the price could just echo it, and an ensemble of price-echoers would
+              teach us nothing.
             </li>
             <li>
-              Models research via <strong className="text-foreground">web search</strong>{" "}
-              (OpenRouter plugins API, Exa.ai-powered), then bet YES, bet NO, or PASS
-              on each market. If a model has previously bet on the same market in this
-              cohort, it sees its prior positions for re-evaluation.
+              The market price is scored as its own forecaster, &ldquo;
+              <strong className="text-foreground">the Crowd</strong>.&rdquo; A market at 62&cent; is a
+              62% forecast. The crowd pools the money and opinions of many humans and bots, so it is a
+              strong, hard-to-beat baseline.
             </li>
             <li>
-              A <strong className="text-foreground">7th ensemble model</strong> automatically
-              aggregates the 6 predictions via majority vote + mean probability at zero API cost.
+              The <strong className="text-foreground">ensemble</strong> is simply the unweighted mean
+              of the valid model probabilities for each market — no tuning, no weighting, zero extra
+              API cost. If a model fails to return a usable forecast, it is left out of that
+              market&apos;s average rather than coerced into a default.
             </li>
             <li>
-              <strong className="text-foreground">Settlement runs every 4 hours</strong> &mdash;
-              resolved markets are checked, P&amp;L and Brier scores computed. Voided
-              markets get full refunds. Pass bets are properly closed.
-            </li>
-            <li>
-              At week&apos;s end, the cohort enters <strong className="text-foreground">settling</strong>{" "}
-              status while remaining bets resolve, then auto-completes when all bets
-              are settled.
+              Rounds run automatically twice daily (10:00 and 22:00 UTC). Settlement checks for
+              resolved markets every few hours and computes each forecaster&apos;s scores. A fresh
+              weekly cohort opens every Monday.
             </li>
           </ol>
         </CardContent>
@@ -79,61 +93,126 @@ export default function AboutPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">The 7 Competing Models</CardTitle>
+          <CardTitle className="text-lg">The forecasters</CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-muted-foreground leading-relaxed">
+        <CardContent className="text-sm leading-relaxed text-muted-foreground">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="pb-2 font-medium text-foreground">Model</th>
+                  <th className="pb-2 font-medium text-foreground">Forecaster</th>
                   <th className="pb-2 font-medium text-foreground">Provider</th>
-                  <th className="pb-2 font-medium text-foreground">Cost (in/out per 1M)</th>
+                  <th className="pb-2 font-medium text-foreground">Cost (in / out per 1M)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                <tr><td className="py-2">Gemini 3 Flash</td><td>Google</td><td className="font-mono">$0.50 / $3.00</td></tr>
-                <tr><td className="py-2">Grok 4.1 Fast</td><td>xAI</td><td className="font-mono">$0.20 / $0.50</td></tr>
-                <tr><td className="py-2">GPT-5.2 Chat</td><td>OpenAI</td><td className="font-mono">$1.75 / $14.00</td></tr>
-                <tr><td className="py-2">DeepSeek V3.2</td><td>DeepSeek</td><td className="font-mono">$0.25 / $0.38</td></tr>
-                <tr><td className="py-2">Kimi K2.5</td><td>Moonshot AI</td><td className="font-mono">$0.45 / $2.25</td></tr>
-                <tr><td className="py-2">Qwen 3 235B</td><td>Alibaba</td><td className="font-mono">$0.20 / $0.60</td></tr>
-                <tr className="text-foreground font-medium"><td className="py-2">Ensemble (Avg)</td><td>Aggregate</td><td className="font-mono">$0.00</td></tr>
+                {MODELS_ONLY.map((m) => (
+                  <tr key={m.id}>
+                    <td className="py-2">
+                      <span className="mr-2">{m.emoji}</span>
+                      {m.name}
+                    </td>
+                    <td>{m.provider}</td>
+                    <td className="font-mono">
+                      {price(m.costIn)} / {price(m.costOut)}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="font-medium text-foreground">
+                  <td className="py-2">
+                    <span className="mr-2">🎯</span>Ensemble (mean)
+                  </td>
+                  <td>Aggregate</td>
+                  <td className="font-mono">$0.00</td>
+                </tr>
+                <tr className="text-foreground">
+                  <td className="py-2">
+                    <span className="mr-2">👥</span>The Crowd
+                  </td>
+                  <td>Polymarket</td>
+                  <td className="font-mono">baseline</td>
+                </tr>
               </tbody>
             </table>
           </div>
           <p className="mt-3">
-            The ensemble aggregates independent forecasts at zero cost. Superforecasting
-            research shows that crowd aggregation consistently beats individual forecasters.
+            We deliberately pick capable but inexpensive recent models, and lean on{" "}
+            <strong className="text-foreground">provider diversity</strong> (US, EU, and China labs).
+            Diverse models tend to make uncorrelated mistakes — and uncorrelated errors are exactly
+            what averaging can cancel out.
           </p>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Dual Scoring System</CardTitle>
+          <CardTitle className="text-lg">Scoring: skill first</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
-          <ul className="list-disc pl-5 space-y-2">
+        <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
+          <ul className="list-disc space-y-2 pl-5">
             <li>
-              <strong className="text-foreground">Brier Score</strong> (calibration):
-              mean squared error between predicted probabilities and actual outcomes.
-              0 = perfect, 0.25 = coin flip. Applied only to non-pass bets.
+              <strong className="text-foreground">Brier score</strong> — mean squared error between
+              the forecast and the outcome. 0 is perfect; 0.25 is a coin flip. Lower is better.
             </li>
             <li>
-              <strong className="text-foreground">Portfolio P&amp;L</strong> (value):
-              can the model translate predictions into profit? Each model starts with
-              $10,000 and must manage position sizing.
+              <strong className="text-foreground">Log loss</strong> — punishes confident mistakes far
+              more harshly than Brier, with probabilities clamped away from 0 and 1.
             </li>
             <li>
-              <strong className="text-foreground">Market Difficulty</strong>: binary
-              entropy of market price at bet time. A 50/50 market (difficulty=1.0) is
-              maximally hard; a 95/5 market (difficulty=0.29) is easy.
+              <strong className="text-foreground">Calibration (ECE)</strong> — when a forecaster says
+              70%, does it happen about 70% of the time? Visualized on each profile&apos;s calibration
+              chart.
             </li>
             <li>
-              <strong className="text-foreground">Correlated Market Detection</strong>:
-              Jaccard similarity on question text clusters related markets. Adjusted P&amp;L
-              deduplicates within clusters to prevent amplified swings.
+              <strong className="text-foreground">Skill vs. crowd</strong> — the headline number:
+              crowd Brier minus the forecaster&apos;s Brier on the same resolved markets. Positive
+              means it beat the market.
+            </li>
+            <li>
+              <strong className="text-foreground">Paper P&amp;L</strong> — a clearly-labeled{" "}
+              <em>secondary</em> view that Kelly-stakes each forecaster&apos;s edge over the crowd. It
+              is a sanity check on the skill numbers, never the headline.
+            </li>
+          </ul>
+          <p>
+            Every forecaster — the six models, the ensemble, and the crowd — is scored on exactly the
+            same shared set of resolved markets, so the comparison is apples-to-apples.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Design decisions</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
+          <ul className="list-disc space-y-2 pl-5">
+            <li>
+              <strong className="text-foreground">Blind forecasts</strong>: hiding the market price is
+              what makes the forecasts independent — and independence is what makes the ensemble
+              meaningful.
+            </li>
+            <li>
+              <strong className="text-foreground">Failures are visible</strong>: a model that errors,
+              times out, or returns an unparseable answer is marked failed and excluded from scoring,
+              never coerced into a default probability. The leaderboard&apos;s reliability column is
+              that valid-response rate.
+            </li>
+            <li>
+              <strong className="text-foreground">Plugins web search</strong> (not the{" "}
+              <code>:online</code> suffix): models can research without silently swapping versions.
+            </li>
+            <li>
+              <strong className="text-foreground">temperature: 0</strong> for every model, so runs are
+              reproducible.
+            </li>
+            <li>
+              <strong className="text-foreground">Full audit trail</strong>: every forecast stores its
+              prompt, raw response, cost, and score in the database.
+            </li>
+            <li>
+              <strong className="text-foreground">Budget cap</strong>: a hard limit on API spend;
+              rounds stop automatically when it is reached.
             </li>
           </ul>
         </CardContent>
@@ -141,57 +220,34 @@ export default function AboutPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Key Design Decisions</CardTitle>
+          <CardTitle className="text-lg">Tech stack</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
-          <ul className="list-disc pl-5 space-y-2">
-            <li>
-              <strong className="text-foreground">Turso/libSQL</strong>: SQLite-compatible
-              edge database. Local file for dev, Turso cloud for production.
-            </li>
-            <li>
-              <strong className="text-foreground">OpenRouter</strong>: single API for 6
-              providers. Unified billing, web search plugins, structured output.
-            </li>
-            <li>
-              <strong className="text-foreground">Plugins web search</strong> (not
-              :online suffix): doesn&apos;t change model routing, unlike :online which
-              may silently swap model versions.
-            </li>
-            <li>
-              <strong className="text-foreground">Weekly cohorts with settling</strong>:
-              fresh bankrolls prevent compounding. Bets resolve across boundaries.
-            </li>
-            <li>
-              <strong className="text-foreground">temperature: 0</strong> for all models.
-              Deterministic output for reproducibility.
-            </li>
-            <li>
-              <strong className="text-foreground">Full audit trail</strong>: every bet
-              stores the exact prompt and raw response.
-            </li>
-            <li>
-              <strong className="text-foreground">$100 budget cap</strong>: hard limit on
-              API spend. Rounds stop automatically when reached.
-            </li>
-          </ul>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Tech Stack</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground leading-relaxed">
+        <CardContent className="text-sm leading-relaxed text-muted-foreground">
           <div className="grid grid-cols-2 gap-2">
-            <div><strong className="text-foreground">Framework:</strong> Next.js 16</div>
-            <div><strong className="text-foreground">Language:</strong> TypeScript</div>
-            <div><strong className="text-foreground">Styling:</strong> Tailwind v4 + shadcn/ui</div>
-            <div><strong className="text-foreground">Charts:</strong> Recharts</div>
-            <div><strong className="text-foreground">Database:</strong> Turso (libSQL)</div>
-            <div><strong className="text-foreground">LLM Gateway:</strong> OpenRouter</div>
-            <div><strong className="text-foreground">Market Data:</strong> Polymarket Gamma API</div>
-            <div><strong className="text-foreground">Scheduling:</strong> Vercel Cron</div>
+            <div>
+              <strong className="text-foreground">Framework:</strong> Next.js 16
+            </div>
+            <div>
+              <strong className="text-foreground">Language:</strong> TypeScript
+            </div>
+            <div>
+              <strong className="text-foreground">Styling:</strong> Tailwind v4 + shadcn/ui
+            </div>
+            <div>
+              <strong className="text-foreground">Charts:</strong> Recharts
+            </div>
+            <div>
+              <strong className="text-foreground">Database:</strong> Turso (libSQL)
+            </div>
+            <div>
+              <strong className="text-foreground">LLM Gateway:</strong> OpenRouter
+            </div>
+            <div>
+              <strong className="text-foreground">Market Data:</strong> Polymarket Gamma API
+            </div>
+            <div>
+              <strong className="text-foreground">Scheduling:</strong> Vercel Cron
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -200,22 +256,48 @@ export default function AboutPage() {
 
       <div className="space-y-2 pb-8">
         <p className="text-xs text-muted-foreground">
-          Research project. Not financial advice. No real money is wagered.
+          An open teaching project on forecast aggregation. Not financial advice. No real money is
+          wagered.
         </p>
         <div className="flex flex-wrap gap-4 text-xs">
-          <a href="https://github.com/ctzn-vishal/llm-predict" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
+          <a
+            href="https://github.com/ctzn-vishal/llm-predict"
+            className="text-primary hover:underline"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             GitHub
           </a>
-          <a href="https://polymarket.com" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
+          <a
+            href="https://polymarket.com"
+            className="text-primary hover:underline"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             Polymarket
           </a>
-          <a href="https://openrouter.ai/docs" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
+          <a
+            href="https://openrouter.ai/docs"
+            className="text-primary hover:underline"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             OpenRouter
           </a>
-          <a href="https://forecasterarena.com" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
+          <a
+            href="https://forecasterarena.com"
+            className="text-primary hover:underline"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             Forecaster Arena
           </a>
-          <a href="https://en.wikipedia.org/wiki/Brier_score" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
+          <a
+            href="https://en.wikipedia.org/wiki/Brier_score"
+            className="text-primary hover:underline"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             Brier Score
           </a>
         </div>

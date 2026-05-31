@@ -13,16 +13,19 @@ export async function GET(request: NextRequest) {
     const summaryRow = await queryOne<{
       cohort_count: number;
       active_market_count: number;
+      resolved_market_count: number;
     }>(
       `SELECT
         (SELECT COUNT(*) FROM cohorts) AS cohort_count,
-        (SELECT COUNT(*) FROM markets WHERE resolved = 0) AS active_market_count`
+        (SELECT COUNT(*) FROM markets WHERE resolved = 0) AS active_market_count,
+        (SELECT COUNT(*) FROM markets WHERE resolved IN (1, 2)) AS resolved_market_count`
     );
 
     return NextResponse.json({
       leaderboard,
       cohort_count: summaryRow?.cohort_count ?? 0,
       active_market_count: summaryRow?.active_market_count ?? 0,
+      resolved_market_count: summaryRow?.resolved_market_count ?? 0,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

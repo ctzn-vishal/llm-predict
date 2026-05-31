@@ -78,7 +78,7 @@ export function CalibrationChart({
                                         return (
                                             <div className="bg-background border border-border p-2 rounded shadow-sm text-xs">
                                                 <p className="font-semibold">Bucket: {d.bucket}</p>
-                                                <p>Count: {d.count} bets</p>
+                                                <p>Count: {d.count} forecasts</p>
                                                 <p>Avg Pred: {(d.avgForecast * 100).toFixed(1)}%</p>
                                                 <p>Win Rate: {(d.winRate * 100).toFixed(1)}%</p>
                                             </div>

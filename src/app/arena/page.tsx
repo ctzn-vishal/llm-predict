@@ -123,27 +123,27 @@ export default async function ArenaPage() {
               <p className="text-xs font-medium text-muted-foreground">
                 New Rounds
               </p>
-              <p className="text-sm font-mono mt-1">10:00 & 22:00 UTC daily</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Syncs markets, runs 7 models on 10-15 markets
+              <p className="mt-1 font-mono text-sm">10:00 & 22:00 UTC daily</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Syncs markets, collects blind forecasts from 6 models on ~12 short-horizon markets
               </p>
             </div>
             <div className="rounded-md border border-border p-3">
               <p className="text-xs font-medium text-muted-foreground">
                 Settlement
               </p>
-              <p className="text-sm font-mono mt-1">Every 4 hours</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Checks resolved markets, computes P&L + Brier
+              <p className="mt-1 font-mono text-sm">Every 4 hours</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Checks resolved markets, scores Brier + log loss
               </p>
             </div>
             <div className="rounded-md border border-border p-3">
               <p className="text-xs font-medium text-muted-foreground">
                 New Cohort
               </p>
-              <p className="text-sm font-mono mt-1">Monday 00:00 UTC</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Fresh $10K bankrolls, archives previous week
+              <p className="mt-1 font-mono text-sm">Monday 00:00 UTC</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Opens a new weekly cohort, archives the previous week
               </p>
             </div>
           </div>

@@ -9,92 +9,114 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { MODEL_COLORS, MODEL_LIST } from "@/lib/models";
-import { fmtDollars, fmtPct, fmtBrier, fmtDate } from "@/lib/format";
-import type { ModelStats, BetRow } from "@/lib/schemas";
-import { getCalibrationCurve, decomposeBrier, getLeaderboard } from "@/lib/scoring";
+import { fmtBrier, fmtPct, fmtSkill, fmtProb, fmtDate } from "@/lib/format";
+import { getCalibrationCurve, getLeaderboard } from "@/lib/scoring";
 import { CalibrationChart } from "@/components/calibration-chart";
+import { forecasterMeta } from "@/lib/models";
 import { queryAll } from "@/lib/db";
+import type { CalibrationBucket, ForecasterStats } from "@/lib/schemas";
 
-interface ModelProfileData {
-  stats: ModelStats | null;
-  bets: BetRow[];
+export const dynamic = "force-dynamic";
+
+interface ForecastHistoryRow {
+  id: number;
+  round_id: string;
+  market_id: string;
+  prob_yes: number | null;
+  crowd_price: number | null;
+  ok: number;
+  error: string | null;
+  settled: number;
+  outcome: number | null;
+  brier: number | null;
+  log_loss: number | null;
+  created_at: string;
+  question: string;
+  market_resolved: number;
 }
 
-async function fetchModelProfile(id: string): Promise<ModelProfileData> {
+// Murphy decomposition straight from the binned calibration curve, so the boxes
+// shown under the chart match the curve exactly.
+function decompFromBuckets(buckets: CalibrationBucket[]) {
+  const N = buckets.reduce((s, b) => s + b.count, 0);
+  if (N === 0) return { reliability: 0, resolution: 0, uncertainty: 0 };
+  const base = buckets.reduce((s, b) => s + b.winRate * b.count, 0) / N;
+  let reliability = 0;
+  let resolution = 0;
+  for (const b of buckets) {
+    if (!b.count) continue;
+    reliability += (b.count / N) * (b.avgForecast - b.winRate) ** 2;
+    resolution += (b.count / N) * (b.winRate - base) ** 2;
+  }
+  return { reliability, resolution, uncertainty: base * (1 - base) };
+}
+
+async function fetchProfile(id: string): Promise<{
+  stats: ForecasterStats | null;
+  history: ForecastHistoryRow[];
+  calibration: CalibrationBucket[];
+}> {
   try {
-    const [statsList, bets] = await Promise.all([
+    const [board, calibration, history] = await Promise.all([
       getLeaderboard(),
-      queryAll<BetRow>(
-        "SELECT * FROM bets WHERE model_id = @model_id ORDER BY created_at DESC",
-        { model_id: id }
+      getCalibrationCurve(id),
+      queryAll<ForecastHistoryRow>(
+        `SELECT f.id, f.round_id, f.market_id, f.prob_yes, f.crowd_price,
+                f.ok, f.error, f.settled, f.outcome, f.brier, f.log_loss, f.created_at,
+                mk.question, mk.resolved AS market_resolved
+         FROM forecasts f
+         JOIN markets mk ON mk.id = f.market_id
+         WHERE f.forecaster_id = @id
+         ORDER BY f.created_at DESC`,
+        { id },
       ),
     ]);
-
-    const stats = statsList.find((m) => m.model_id === id) ?? null;
-
-    return { stats, bets };
+    return { stats: board.find((f) => f.forecaster_id === id) ?? null, history, calibration };
   } catch (error) {
     console.error("Error fetching model profile:", error);
-    return { stats: null, bets: [] };
+    return { stats: null, history: [], calibration: [] };
   }
 }
 
-function actionBadge(action: string) {
-  switch (action) {
-    case "bet_yes":
-      return <Badge className="bg-emerald-500/20 text-emerald-400">YES</Badge>;
-    case "bet_no":
-      return <Badge className="bg-red-500/20 text-red-400">NO</Badge>;
-    default:
-      return <Badge variant="secondary">PASS</Badge>;
-  }
+function outcomeBadge(outcome: number | null) {
+  if (outcome === 1) return <Badge className="bg-emerald-500/20 text-emerald-400">YES</Badge>;
+  if (outcome === 0) return <Badge className="bg-red-500/20 text-red-400">NO</Badge>;
+  return <span className="text-muted-foreground">—</span>;
 }
 
 export default async function ModelProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { stats, bets } = await fetchModelProfile(id);
+  const { stats, history, calibration } = await fetchProfile(id);
 
-  const modelInfo = MODEL_LIST.find((m) => m.id === id);
-  const colors = MODEL_COLORS[id];
-
-  if (!stats && !modelInfo) {
+  const meta = forecasterMeta(id);
+  if (!stats && history.length === 0) {
     return (
       <div className="space-y-4">
         <Link href="/models" className="text-sm text-muted-foreground hover:underline">
           &larr; Back to models
         </Link>
-        <p className="text-muted-foreground py-8 text-center">Model not found.</p>
+        <p className="py-8 text-center text-muted-foreground">No data for this forecaster yet.</p>
       </div>
     );
   }
 
-  const name = stats?.display_name ?? modelInfo?.name ?? id;
-  const emoji = stats?.avatar_emoji ?? modelInfo?.emoji ?? "";
-  const provider = stats?.provider ?? modelInfo?.provider ?? "";
+  const empty = !stats || stats.n_resolved === 0;
+  const isCrowd = meta.kind === "crowd";
+  const decomposition = decompFromBuckets(calibration);
 
-  // Prepare calibration data
-  const settledBets = bets.filter(b => b.settled === 1 && b.estimated_probability != null);
-  const calibrationInputs = settledBets.map(b => {
-    // Infer resolved_yes from PnL and Action
-    // Yes bet, positive PnL -> Yes
-    // Yes bet, negative PnL -> No
-    // No bet, positive PnL -> No (won on No)
-    // No bet, negative PnL -> Yes (lost on No)
-    let resolved_yes = false; // default
-    if (b.action === 'bet_yes') {
-      resolved_yes = b.pnl > 0;
-    } else if (b.action === 'bet_no') {
-      resolved_yes = b.pnl < 0;
-    }
-    return {
-      estimated_probability: b.estimated_probability!,
-      resolved_yes
-    };
-  });
-
-  const calibrationCurve = getCalibrationCurve(calibrationInputs);
-  const decomposition = decomposeBrier(calibrationInputs);
+  const statCards: { label: string; value: string; color?: string }[] = [
+    {
+      label: "Skill vs Crowd",
+      value: empty || isCrowd ? "—" : fmtSkill(stats!.skill_vs_crowd),
+      color: empty || isCrowd ? undefined : stats!.skill_vs_crowd >= 0 ? "text-emerald-400" : "text-red-400",
+    },
+    { label: "Brier", value: empty ? "—" : fmtBrier(stats!.brier) },
+    { label: "Log Loss", value: empty ? "—" : stats!.log_loss.toFixed(3) },
+    { label: "ECE", value: empty ? "—" : fmtBrier(stats!.calibration_error) },
+    { label: "Resolution", value: empty ? "—" : fmtBrier(stats!.resolution) },
+    { label: "Forecasts", value: `${stats?.n_total ?? history.length} (${stats?.n_resolved ?? 0})` },
+    { label: "Reliability", value: fmtPct((stats?.ok_rate ?? 0) * 100) },
+  ];
 
   return (
     <div className="space-y-8">
@@ -102,47 +124,47 @@ export default async function ModelProfilePage({ params }: { params: Promise<{ i
         <Link href="/models" className="text-sm text-muted-foreground hover:underline">
           &larr; Back to models
         </Link>
-        <div className="flex items-center gap-3 mt-2">
-          <span className="text-4xl">{emoji}</span>
+        <div className="mt-2 flex items-center gap-3">
+          <span className="text-4xl">{meta.emoji}</span>
           <div>
-            <h1 className={`text-2xl font-bold tracking-tight ${colors?.text ?? ""}`}>{name}</h1>
-            <Badge variant="secondary">{provider}</Badge>
+            <h1 className="text-2xl font-bold tracking-tight" style={{ color: meta.color }}>
+              {meta.name}
+            </h1>
+            <Badge variant="secondary">{meta.provider}</Badge>
           </div>
         </div>
+        {isCrowd && (
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+            The crowd is the Polymarket price itself — the baseline every model is measured
+            against. It cannot have skill &ldquo;vs. the crowd&rdquo; because it is the crowd.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
-        {[
-          { label: "Bankroll", value: fmtDollars(stats?.bankroll ?? 10000) },
-          { label: "ROI", value: (stats?.roi_pct ?? 0) >= 0 ? `+${fmtPct(stats?.roi_pct ?? 0)}` : fmtPct(stats?.roi_pct ?? 0), color: (stats?.roi_pct ?? 0) >= 0 ? "text-emerald-400" : "text-red-400" },
-          { label: "Brier Score", value: fmtBrier(stats?.brier_score ?? 0) },
-          { label: "Win Rate", value: fmtPct((stats?.win_rate ?? 0) * 100) },
-          { label: "Total Bets", value: `${stats?.total_bets ?? 0} (${stats?.resolved_bets ?? 0})` },
-          { label: "Pass Rate", value: fmtPct((stats?.pass_rate ?? 0) * 100) },
-          { label: "Avg Confidence", value: fmtPct((stats?.avg_confidence ?? 0) * 100) },
-        ].map((s) => (
+        {statCards.map((s) => (
           <Card key={s.label}>
             <CardContent className="p-4">
               <p className="text-xs text-muted-foreground">{s.label}</p>
-              <p className={`text-lg font-bold font-mono ${(s as { color?: string }).color ?? ""}`}>{s.value}</p>
+              <p className={`font-mono text-lg font-bold ${s.color ?? ""}`}>{s.value}</p>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      <div className="h-[400px]">
+      {!empty && (
         <CalibrationChart
-          data={calibrationCurve}
-          brierScore={stats?.brier_score ?? 0}
+          data={calibration}
+          brierScore={stats!.brier}
           decomposition={decomposition}
         />
-      </div>
+      )}
 
       <div>
-        <h2 className="text-lg font-semibold mb-4">Bet History</h2>
-        {bets.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-8 text-center">
-            No bets yet for this model.
+        <h2 className="mb-4 text-lg font-semibold">Forecast history</h2>
+        {history.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No forecasts yet for this forecaster.
           </p>
         ) : (
           <div className="rounded-lg border border-border">
@@ -150,38 +172,52 @@ export default async function ModelProfilePage({ params }: { params: Promise<{ i
               <TableHeader>
                 <TableRow>
                   <TableHead>Date</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Confidence</TableHead>
-                  <TableHead>Bet</TableHead>
-                  <TableHead>Mkt Price</TableHead>
-                  <TableHead>P&L</TableHead>
-                  <TableHead>Brier</TableHead>
+                  <TableHead>Market</TableHead>
+                  <TableHead className="text-right">P(YES)</TableHead>
+                  <TableHead className="text-right">Crowd</TableHead>
+                  <TableHead className="text-center">Outcome</TableHead>
+                  <TableHead className="text-right">Brier</TableHead>
                   <TableHead>Round</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {bets.map((bet) => (
-                  <TableRow key={bet.id}>
-                    <TableCell className="text-xs text-muted-foreground">{fmtDate(bet.created_at)}</TableCell>
-                    <TableCell>{actionBadge(bet.action)}</TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {bet.confidence != null ? `${Math.round(bet.confidence * 100)}%` : "--"}
+                {history.map((h) => (
+                  <TableRow key={h.id}>
+                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                      {fmtDate(h.created_at)}
                     </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {bet.bet_amount != null ? fmtDollars(bet.bet_amount) : "--"}
+                    <TableCell className="max-w-[320px]">
+                      {h.ok === 0 ? (
+                        <span className="flex items-center gap-2">
+                          <span className="line-clamp-1 text-muted-foreground">{h.question}</span>
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 border-red-500/40 text-[10px] text-red-400"
+                            title={h.error ?? "forecast failed"}
+                          >
+                            failed
+                          </Badge>
+                        </span>
+                      ) : (
+                        <span className="line-clamp-1">{h.question}</span>
+                      )}
                     </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {bet.market_price_at_bet != null ? `${Math.round(bet.market_price_at_bet * 100)}c` : "--"}
+                    <TableCell className="text-right font-mono">
+                      {h.prob_yes != null ? fmtProb(h.prob_yes) : "—"}
                     </TableCell>
-                    <TableCell className={`font-mono text-sm font-semibold ${bet.pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                      {bet.settled ? `${bet.pnl >= 0 ? "+" : ""}${fmtDollars(bet.pnl)}` : "--"}
+                    <TableCell className="text-right font-mono text-muted-foreground">
+                      {h.crowd_price != null ? fmtProb(h.crowd_price) : "—"}
                     </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {bet.brier_score != null ? fmtBrier(bet.brier_score) : "--"}
+                    <TableCell className="text-center">{outcomeBadge(h.outcome)}</TableCell>
+                    <TableCell className="text-right font-mono">
+                      {h.brier != null ? fmtBrier(h.brier) : "—"}
                     </TableCell>
                     <TableCell>
-                      <Link href={`/rounds/${bet.round_id}`} className="text-xs text-muted-foreground hover:underline">
-                        {bet.round_id.slice(0, 8)}
+                      <Link
+                        href={`/rounds/${h.round_id}`}
+                        className="font-mono text-xs text-muted-foreground hover:underline"
+                      >
+                        {h.round_id.slice(0, 8)}
                       </Link>
                     </TableCell>
                   </TableRow>

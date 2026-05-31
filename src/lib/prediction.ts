@@ -1,55 +1,271 @@
 import { nanoid } from "nanoid";
 import { queryAll, queryOne, run } from "./db";
-import type {
-  BetRow,
-  CohortRow,
-  CohortModelRow,
-  MarketRow,
-  ModelRow,
-} from "./schemas";
-import { callModel, buildPrompt, type PreviousBetContext } from "./openrouter";
+import type { CohortRow, ForecasterKind, MarketRow, ModelRow } from "./schemas";
+import { forecastMarket } from "./openrouter";
 
 export interface RoundResult {
   roundId: string;
-  bets: BetRow[];
+  marketCount: number;
+  forecastCount: number; // total forecast rows written (models + ensemble + crowd)
+  okCount: number;
+  failCount: number;
+  totalCost: number;
 }
 
+// Horizon window for a round, kept in sync with the Gamma-side gate in
+// polymarket.ts. We forecast GENUINELY-FUTURE events: at least a day out (so the
+// outcome isn't already decided/lookupable) and within ~6 weeks (so the
+// forecast -> resolve -> score feedback loop still closes).
+const MIN_HORIZON_DAYS = 1;
+const MAX_HORIZON_DAYS = 45;
+const ONE_DAY_MS = 86_400_000;
+// How many markets to forecast concurrently. Each market fans out to the 6
+// model forecasters in parallel, so this caps in-flight OpenRouter calls at
+// ~MARKET_CONCURRENCY * 6. We keep this at 3: a full 12-market round then runs
+// in 4 waves, comfortably under the serverless 300s budget given the 30s
+// per-attempt fail-fast in openrouter.ts. (gpt-oss-120b is the only remaining
+// model that occasionally times out; failures are recorded visibly with ok=0
+// and excluded from scoring rather than coerced to a default.)
+const MARKET_CONCURRENCY = 3;
+
 /**
- * Select 10-20 unresolved markets from the DB cache for a round.
- * Picks markets with decent volume and prices not too extreme.
+ * Pick genuinely-future, unresolved, non-extreme markets for a round. Mirrors
+ * the Gamma-side selection in polymarket.ts but operates on cached DB rows: only
+ * markets that resolve at least a day out and within ~6 weeks, with a price that
+ * leaves room for skill (a near-certain market measures nothing). Sports/weather
+ * are already excluded upstream at sync time, so they never reach here.
  */
-function selectRoundMarkets(allMarkets: MarketRow[], count = 15): MarketRow[] {
+function selectRoundMarkets(allMarkets: MarketRow[], count = 12): MarketRow[] {
+  const now = Date.now();
+  const minMs = MIN_HORIZON_DAYS * ONE_DAY_MS;
+  const maxMs = MAX_HORIZON_DAYS * ONE_DAY_MS;
   return allMarkets
     .filter((m) => {
       if (m.resolved !== 0) return false;
-      if (m.yes_price != null && (m.yes_price < 0.05 || m.yes_price > 0.95)) return false;
+      if (m.yes_price == null) return false;
+      if (m.yes_price < 0.05 || m.yes_price > 0.95) return false;
+      if (!m.end_date) return false;
+      const endMs = new Date(m.end_date).getTime();
+      if (Number.isNaN(endMs)) return false;
+      const horizon = endMs - now;
+      if (horizon < minMs || horizon > maxMs) return false;
       return true;
     })
     .sort((a, b) => (b.volume_24h ?? 0) - (a.volume_24h ?? 0))
     .slice(0, count);
 }
 
+interface ForecastInsert {
+  roundId: string;
+  cohortId: string;
+  marketId: string;
+  forecasterId: string;
+  forecasterKind: ForecasterKind;
+  probYes: number | null;
+  reasoning: string | null;
+  keyFactors: string | null; // JSON-encoded string[]
+  crowdPrice: number | null;
+  promptText: string | null;
+  rawResponse: string | null;
+  ok: number; // 1 = valid forecast, 0 = failure (error explains why)
+  error: string | null;
+  apiCost: number;
+  apiLatencyMs: number;
+}
+
+// One row per (round, market, forecaster). OR REPLACE keeps a re-run of the same
+// round idempotent against the unique (round_id, market_id, forecaster_id) index.
+async function insertForecast(f: ForecastInsert): Promise<void> {
+  await run(
+    `INSERT OR REPLACE INTO forecasts
+       (round_id, cohort_id, market_id, forecaster_id, forecaster_kind,
+        prob_yes, reasoning, key_factors, crowd_price, prompt_text, raw_response,
+        ok, error, api_cost, api_latency_ms, settled, outcome, brier, log_loss)
+     VALUES
+       (@round_id, @cohort_id, @market_id, @forecaster_id, @forecaster_kind,
+        @prob_yes, @reasoning, @key_factors, @crowd_price, @prompt_text, @raw_response,
+        @ok, @error, @api_cost, @api_latency_ms, 0, NULL, NULL, NULL)`,
+    {
+      round_id: f.roundId,
+      cohort_id: f.cohortId,
+      market_id: f.marketId,
+      forecaster_id: f.forecasterId,
+      forecaster_kind: f.forecasterKind,
+      prob_yes: f.probYes,
+      reasoning: f.reasoning,
+      key_factors: f.keyFactors,
+      crowd_price: f.crowdPrice,
+      prompt_text: f.promptText,
+      raw_response: f.rawResponse,
+      ok: f.ok,
+      error: f.error,
+      api_cost: f.apiCost,
+      api_latency_ms: f.apiLatencyMs,
+    },
+  );
+}
+
+interface MarketTotals {
+  forecastCount: number;
+  okCount: number;
+  failCount: number;
+  cost: number;
+}
+
+/**
+ * Forecast a single market: every model forecaster in parallel, then the two
+ * computed forecasters (`ensemble` = mean of valid model probs, `crowd` = the
+ * Polymarket price). Returns per-market tallies so the caller can aggregate
+ * across markets that run concurrently. Failures are stored with ok=0 and an
+ * error reason -- never silently coerced into a default.
+ */
+async function processMarket(
+  market: MarketRow,
+  roundId: string,
+  cohortId: string,
+  models: ModelRow[],
+): Promise<MarketTotals> {
+  const crowdPrice = market.yes_price;
+  let forecastCount = 0;
+  let okCount = 0;
+  let failCount = 0;
+  let cost = 0;
+
+  // a. Ask all model forecasters in parallel for a blind probability.
+  const results = await Promise.all(
+    models.map(async (model) => {
+      const r = await forecastMarket(model.openrouter_id, market);
+      await insertForecast({
+        roundId,
+        cohortId,
+        marketId: market.id,
+        forecasterId: model.id,
+        forecasterKind: "model",
+        probYes: r.ok ? r.prob : null,
+        reasoning: r.reasoning,
+        keyFactors: r.keyFactors ? JSON.stringify(r.keyFactors) : null,
+        crowdPrice,
+        promptText: r.promptText,
+        rawResponse: r.raw || null,
+        ok: r.ok ? 1 : 0,
+        error: r.error,
+        apiCost: r.cost,
+        apiLatencyMs: r.latencyMs,
+      });
+      return r;
+    }),
+  );
+
+  forecastCount += results.length;
+  for (const r of results) {
+    if (r.ok) okCount += 1;
+    else failCount += 1;
+    cost += r.cost;
+  }
+
+  // b. Ensemble = mean of the VALID model probabilities. If nothing valid,
+  //    record the ensemble as a visible failure rather than a fake 0.5.
+  const validProbs = results
+    .filter((r) => r.ok && r.prob != null)
+    .map((r) => r.prob as number);
+
+  if (validProbs.length > 0) {
+    const mean = validProbs.reduce((s, p) => s + p, 0) / validProbs.length;
+    await insertForecast({
+      roundId,
+      cohortId,
+      marketId: market.id,
+      forecasterId: "ensemble",
+      forecasterKind: "ensemble",
+      probYes: mean,
+      reasoning: `Mean of ${validProbs.length}/${models.length} valid model forecasts.`,
+      keyFactors: null,
+      crowdPrice,
+      promptText: null,
+      rawResponse: null,
+      ok: 1,
+      error: null,
+      apiCost: 0,
+      apiLatencyMs: 0,
+    });
+    okCount += 1;
+  } else {
+    await insertForecast({
+      roundId,
+      cohortId,
+      marketId: market.id,
+      forecasterId: "ensemble",
+      forecasterKind: "ensemble",
+      probYes: null,
+      reasoning: null,
+      keyFactors: null,
+      crowdPrice,
+      promptText: null,
+      rawResponse: null,
+      ok: 0,
+      error: "no valid member forecasts",
+      apiCost: 0,
+      apiLatencyMs: 0,
+    });
+    failCount += 1;
+  }
+  forecastCount += 1;
+
+  // c. Crowd = the Polymarket price itself -- our baseline to beat.
+  const crowdOk = crowdPrice != null;
+  await insertForecast({
+    roundId,
+    cohortId,
+    marketId: market.id,
+    forecasterId: "crowd",
+    forecasterKind: "crowd",
+    probYes: crowdPrice,
+    reasoning: crowdOk ? "Polymarket implied probability (crowd baseline)." : null,
+    keyFactors: null,
+    crowdPrice,
+    promptText: null,
+    rawResponse: null,
+    ok: crowdOk ? 1 : 0,
+    error: crowdOk ? null : "no market price",
+    apiCost: 0,
+    apiLatencyMs: 0,
+  });
+  if (crowdOk) okCount += 1;
+  else failCount += 1;
+  forecastCount += 1;
+
+  return { forecastCount, okCount, failCount, cost };
+}
+
+/**
+ * Run one round of BLIND forecasts.
+ *
+ * Markets are processed in concurrent batches (MARKET_CONCURRENCY). Within each
+ * market we ask all model forecasters in parallel for an independent P(YES) --
+ * they never see the market price -- then write two synthetic forecasters:
+ * `ensemble` (mean of the valid model probs) and `crowd` (the Polymarket price,
+ * our baseline to beat). Failures are stored with ok=0 and an error reason --
+ * never silently coerced into a default, which was the core bug in the old
+ * betting pipeline.
+ */
 export async function runRound(cohortId: string): Promise<RoundResult> {
-  // a. Get active cohort from DB
   const cohort = await queryOne<CohortRow>(
     "SELECT * FROM cohorts WHERE id = @id AND status = 'active'",
-    { id: cohortId }
+    { id: cohortId },
   );
   if (!cohort) {
     throw new Error(`No active cohort found with id: ${cohortId}`);
   }
 
-  // b. Get all cached markets, pick 10-20 for this round
   const allMarkets = await queryAll<MarketRow>(
-    "SELECT * FROM markets WHERE resolved = 0 ORDER BY volume_24h DESC"
+    "SELECT * FROM markets WHERE resolved = 0 ORDER BY volume_24h DESC",
   );
   const selectedMarkets = selectRoundMarkets(allMarkets);
   if (selectedMarkets.length === 0) {
-    throw new Error("No markets available for this round");
+    throw new Error("No short-horizon markets available for this round");
   }
   const selectedIds = selectedMarkets.map((m) => m.id);
 
-  // c. Create round record
   const roundId = nanoid();
   await run(
     "INSERT INTO rounds (id, cohort_id, market_ids, status) VALUES (@id, @cohort_id, @market_ids, @status)",
@@ -58,225 +274,71 @@ export async function runRound(cohortId: string): Promise<RoundResult> {
       cohort_id: cohortId,
       market_ids: JSON.stringify(selectedIds),
       status: "in_progress",
-    }
+    },
   );
 
-  // d. Get all models (excluding ensemble)
-  const models = await queryAll<ModelRow>("SELECT * FROM models WHERE id != 'ensemble'");
+  // The 6 live LLM forecasters (ensemble + crowd are computed, not called).
+  const models = await queryAll<ModelRow>(
+    "SELECT * FROM models WHERE id NOT IN ('ensemble', 'crowd') ORDER BY id",
+  );
 
-  // e. For each market, process all models in parallel
-  const allBets: BetRow[] = [];
-
-  for (const market of selectedMarkets) {
-    const modelResults = await Promise.all(
-      models.map(async (model) => {
-        // Get current bankroll
-        const cohortModel = await queryOne<CohortModelRow>(
-          "SELECT * FROM cohort_models WHERE cohort_id = @cohort_id AND model_id = @model_id",
-          { cohort_id: cohortId, model_id: model.id }
-        );
-        const bankroll = cohortModel?.bankroll ?? 10000;
-
-        // Call the model via OpenRouter
-        let action = "pass";
-        let confidence: number | null = null;
-        let betSizePct: number | null = null;
-        let betAmount: number | null = null;
-        let estimatedProbability: number | null = null;
-        let reasoning: string | null = null;
-        let keyFactors: string | null = null;
-        let promptText: string | null = buildPrompt(market);
-        let rawResponse: string | null = null;
-        let apiCost = 0;
-        let apiLatencyMs = 0;
-
-        const previousBets = await queryAll<PreviousBetContext>(
-          `SELECT action, market_price_at_bet, estimated_probability, confidence, created_at
-           FROM bets WHERE model_id = @model_id AND market_id = @market_id AND cohort_id = @cohort_id
-           ORDER BY created_at DESC LIMIT 3`,
-          { model_id: model.id, market_id: market.id, cohort_id: cohortId }
-        );
-
-        try {
-          const result = await callModel(model.openrouter_id, market, previousBets);
-          rawResponse = result.rawResponse;
-          apiCost = result.cost;
-          apiLatencyMs = result.latencyMs;
-
-          if (result.prediction) {
-            action = result.prediction.action;
-            confidence = result.prediction.confidence;
-            betSizePct = result.prediction.bet_size_pct;
-            estimatedProbability = result.prediction.estimated_probability;
-            reasoning = result.prediction.reasoning;
-            keyFactors = JSON.stringify(result.prediction.key_factors);
-
-            // Calculate bet amount and deduct from bankroll
-            if (action === "bet_yes" || action === "bet_no") {
-              betAmount = bankroll * (betSizePct! / 100);
-              await run(
-                "UPDATE cohort_models SET bankroll = bankroll - @amount WHERE cohort_id = @cohort_id AND model_id = @model_id",
-                {
-                  amount: betAmount,
-                  cohort_id: cohortId,
-                  model_id: model.id,
-                }
-              );
-            }
-          }
-          // else: prediction was null (parse failure) -- forced pass
-        } catch {
-          // API failure -- forced pass
-        }
-
-        // Insert bet record
-        const insertResult = await run(
-          `INSERT INTO bets (model_id, market_id, cohort_id, round_id, action, confidence, bet_size_pct, bet_amount, estimated_probability, market_price_at_bet, reasoning, key_factors, prompt_text, raw_response, settled, pnl, brier_score, api_cost, api_latency_ms)
-           VALUES (@model_id, @market_id, @cohort_id, @round_id, @action, @confidence, @bet_size_pct, @bet_amount, @estimated_probability, @market_price_at_bet, @reasoning, @key_factors, @prompt_text, @raw_response, 0, 0, NULL, @api_cost, @api_latency_ms)`,
-          {
-            model_id: model.id,
-            market_id: market.id,
-            cohort_id: cohortId,
-            round_id: roundId,
-            action,
-            confidence,
-            bet_size_pct: betSizePct,
-            bet_amount: betAmount,
-            estimated_probability: estimatedProbability,
-            market_price_at_bet: market.yes_price,
-            reasoning,
-            key_factors: keyFactors,
-            prompt_text: promptText,
-            raw_response: rawResponse,
-            api_cost: apiCost,
-            api_latency_ms: apiLatencyMs,
-          }
-        );
-
-        return {
-          id: Number(insertResult.lastInsertRowid),
-          model_id: model.id,
-          market_id: market.id,
-          cohort_id: cohortId,
-          round_id: roundId,
-          action,
-          confidence,
-          bet_size_pct: betSizePct,
-          bet_amount: betAmount,
-          estimated_probability: estimatedProbability,
-          market_price_at_bet: market.yes_price,
-          reasoning,
-          key_factors: keyFactors,
-          prompt_text: promptText,
-          raw_response: rawResponse,
-          settled: 0,
-          pnl: 0,
-          brier_score: null,
-          api_cost: apiCost,
-          api_latency_ms: apiLatencyMs,
-          created_at: new Date().toISOString(),
-        } satisfies BetRow;
-      })
+  // Soft budget guard: stop launching new markets once cumulative spend would
+  // exceed the cap. 0 / unset disables the guard.
+  const budgetCap = Number(process.env.BUDGET_CAP_USD ?? "0");
+  let spentTotal = 0;
+  if (budgetCap > 0) {
+    const row = await queryOne<{ total: number }>(
+      "SELECT COALESCE(SUM(api_cost), 0) AS total FROM forecasts",
     );
+    spentTotal = row?.total ?? 0;
+  }
 
-    allBets.push(...modelResults);
+  let forecastCount = 0;
+  let okCount = 0;
+  let failCount = 0;
+  let totalCost = 0;
+  let stoppedForBudget = false;
 
-    // Compute ensemble prediction
-    const nonPassBets = modelResults.filter(b => b.action === 'bet_yes' || b.action === 'bet_no');
-    if (nonPassBets.length > 0) {
-      const yesBets = nonPassBets.filter(b => b.action === 'bet_yes');
-      const noBets = nonPassBets.filter(b => b.action === 'bet_no');
-
-      // Majority vote
-      let ensembleAction: string;
-      if (yesBets.length > noBets.length) {
-        ensembleAction = 'bet_yes';
-      } else if (noBets.length > yesBets.length) {
-        ensembleAction = 'bet_no';
-      } else {
-        ensembleAction = 'pass'; // tie = pass
-      }
-
-      // Mean estimated probability
-      const avgProb = nonPassBets.reduce((sum, b) => sum + (b.estimated_probability ?? 0), 0) / nonPassBets.length;
-      const avgConfidence = nonPassBets.reduce((sum, b) => sum + (b.confidence ?? 0), 0) / nonPassBets.length;
-      const avgBetSizePct = nonPassBets.reduce((sum, b) => sum + (b.bet_size_pct ?? 0), 0) / nonPassBets.length;
-
-      const passCount = modelResults.filter(b => b.action === 'pass').length;
-      const ensembleReasoning = `Ensemble of ${modelResults.length} models: ${yesBets.length} bet YES, ${noBets.length} bet NO, ${passCount} passed. Avg probability: ${avgProb.toFixed(3)}`;
-
-      // Get ensemble bankroll
-      const ensembleCM = await queryOne<CohortModelRow>(
-        "SELECT * FROM cohort_models WHERE cohort_id = @cohort_id AND model_id = 'ensemble'",
-        { cohort_id: cohortId }
-      );
-      const ensembleBankroll = ensembleCM?.bankroll ?? 10000;
-
-      let ensembleBetAmount: number | null = null;
-      if (ensembleAction === 'bet_yes' || ensembleAction === 'bet_no') {
-        ensembleBetAmount = ensembleBankroll * (avgBetSizePct / 100);
-        await run(
-          "UPDATE cohort_models SET bankroll = bankroll - @amount WHERE cohort_id = @cohort_id AND model_id = 'ensemble'",
-          { amount: ensembleBetAmount, cohort_id: cohortId }
-        );
-      }
-
-      const ensembleInsert = await run(
-        `INSERT INTO bets (model_id, market_id, cohort_id, round_id, action, confidence, bet_size_pct, bet_amount, estimated_probability, market_price_at_bet, reasoning, key_factors, prompt_text, raw_response, settled, pnl, brier_score, api_cost, api_latency_ms)
-         VALUES ('ensemble', @market_id, @cohort_id, @round_id, @action, @confidence, @bet_size_pct, @bet_amount, @estimated_probability, @market_price_at_bet, @reasoning, NULL, NULL, NULL, 0, 0, NULL, 0, 0)`,
-        {
-          market_id: market.id,
-          cohort_id: cohortId,
-          round_id: roundId,
-          action: ensembleAction,
-          confidence: avgConfidence,
-          bet_size_pct: avgBetSizePct,
-          bet_amount: ensembleBetAmount,
-          estimated_probability: avgProb,
-          market_price_at_bet: market.yes_price,
-          reasoning: ensembleReasoning,
-        }
-      );
-
-      allBets.push({
-        id: Number(ensembleInsert.lastInsertRowid),
-        model_id: 'ensemble',
-        market_id: market.id,
-        cohort_id: cohortId,
-        round_id: roundId,
-        action: ensembleAction,
-        confidence: avgConfidence,
-        bet_size_pct: avgBetSizePct,
-        bet_amount: ensembleBetAmount,
-        estimated_probability: avgProb,
-        market_price_at_bet: market.yes_price,
-        reasoning: ensembleReasoning,
-        key_factors: null,
-        prompt_text: null,
-        raw_response: null,
-        settled: 0,
-        pnl: 0,
-        brier_score: null,
-        api_cost: 0,
-        api_latency_ms: 0,
-        created_at: new Date().toISOString(),
-      } satisfies BetRow);
+  // Process markets in concurrent batches. Re-check the soft budget guard
+  // before launching each batch -- granular enough for a spend ceiling, while
+  // keeping a full round well within the serverless time budget.
+  for (let i = 0; i < selectedMarkets.length; i += MARKET_CONCURRENCY) {
+    if (budgetCap > 0 && spentTotal >= budgetCap) {
+      stoppedForBudget = true;
+      break;
+    }
+    const batch = selectedMarkets.slice(i, i + MARKET_CONCURRENCY);
+    const batchTotals = await Promise.all(
+      batch.map((market) => processMarket(market, roundId, cohortId, models)),
+    );
+    for (const t of batchTotals) {
+      forecastCount += t.forecastCount;
+      okCount += t.okCount;
+      failCount += t.failCount;
+      totalCost += t.cost;
+      spentTotal += t.cost;
     }
   }
 
-  // f. Update round status to 'completed'
-  await run("UPDATE rounds SET status = 'completed' WHERE id = @id", {
-    id: roundId,
-  });
-
-  // Update cohort market count (unique markets, not cumulative)
   await run(
-    `UPDATE cohorts SET market_count = (
-      SELECT COUNT(DISTINCT market_id) FROM bets WHERE cohort_id = @id
-    ) WHERE id = @id`,
-    { id: cohortId }
+    "UPDATE rounds SET status = @status WHERE id = @id",
+    { id: roundId, status: stoppedForBudget ? "partial" : "completed" },
   );
 
-  // g. Return round data with all bets
-  return { roundId, bets: allBets };
+  // Cohort market_count = distinct markets the cohort has ever forecast.
+  await run(
+    `UPDATE cohorts SET market_count = (
+      SELECT COUNT(DISTINCT market_id) FROM forecasts WHERE cohort_id = @id
+    ) WHERE id = @id`,
+    { id: cohortId },
+  );
+
+  return {
+    roundId,
+    marketCount: selectedMarkets.length,
+    forecastCount,
+    okCount,
+    failCount,
+    totalCost,
+  };
 }

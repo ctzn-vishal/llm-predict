@@ -1,191 +1,240 @@
 import {
-  PredictionSchema,
-  PREDICTION_JSON_SCHEMA,
-  type Prediction,
+  ForecastSchema,
+  FORECAST_JSON_SCHEMA,
   type MarketRow,
 } from "@/lib/schemas";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-
-const MAX_RETRIES = 3;
-const RETRY_DELAYS_MS = [1000, 2000, 4000];
-
-// ---------------------------------------------------------------------------
-// System prompt for prediction
-// ---------------------------------------------------------------------------
-const SYSTEM_PROMPT = `You are a professional forecaster competing in a prediction market tournament.
-Your goal is to make well-calibrated probability estimates and profitable betting decisions.
-
-You will be given a prediction market question along with current market prices.
-You have access to the internet via web search to research the question.
-
-Analyze the question carefully, research relevant information, and provide:
-1. Your estimated probability of the event occurring
-2. Whether to bet YES, bet NO, or PASS (if no edge)
-3. Your confidence level (0-1)
-4. Suggested bet size as a percentage of bankroll (1-25%)
-5. Clear reasoning and key factors
-
-Respond ONLY with valid JSON matching the required schema. Do not include any other text.`;
+const MAX_RETRIES = 2;
+const RETRY_DELAYS_MS = [800, 2000, 5000];
+// Bound a single attempt so one slow provider can't stall a whole round.
+// Successful blind forecasts (web search + short JSON) return in <=10s in
+// practice, so 30s is generous headroom; a request that blows it is treated as
+// a fail-fast (see the catch block -- we do NOT retry a timed-out attempt,
+// which would otherwise burn another full timeout window per retry).
+const REQUEST_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
-// Re-eval context for previous bets
+// System prompt -- BLIND. The model never sees the market price, so its
+// probability is independent of the crowd. That independence is what makes the
+// "can the committee beat the crowd?" comparison meaningful.
 // ---------------------------------------------------------------------------
-export interface PreviousBetContext {
-  action: string;
-  market_price_at_bet: number | null;
-  estimated_probability: number | null;
-  confidence: number | null;
-  created_at: string;
+const SYSTEM_PROMPT = `You are a professional forecaster. You will be given a real-world yes/no question that resolves in the near future.
+
+Your job: estimate the TRUE probability that the question resolves YES, as a number between 0 and 1.
+
+Guidelines:
+- Use web search to gather current, relevant facts before answering.
+- Think in terms of base rates, then adjust for specific evidence.
+- Be well-calibrated: if you say 0.70, the event should happen about 70% of the time. Avoid unwarranted 0.0 or 1.0.
+- You are NOT told any market price or betting odds. Form your own independent estimate.
+- Keep reasoning concise (2-4 sentences) and list the key factors.
+
+Respond ONLY with valid JSON matching the required schema. No prose outside the JSON.`;
+
+function fmtDate(iso: string | null): string {
+  if (!iso) return "unknown";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toISOString().slice(0, 10);
 }
 
-// ---------------------------------------------------------------------------
-// Build the user prompt for a specific market
-// ---------------------------------------------------------------------------
-function buildPrompt(market: MarketRow, previousBets?: PreviousBetContext[]): string {
-  let previousBetsSection = "";
-  if (previousBets && previousBets.length > 0) {
-    previousBetsSection = `\n**Your Previous Bets on This Market (this cohort):**
-${previousBets.map(b => `- [${b.created_at}]: ${b.action} at market price $${b.market_price_at_bet?.toFixed(2) ?? 'N/A'}, your estimated prob: ${b.estimated_probability?.toFixed(2) ?? 'N/A'}, confidence: ${b.confidence?.toFixed(2) ?? 'N/A'}`).join('\n')}
+export function buildForecastPrompt(market: MarketRow): string {
+  return `# Question
+${market.question}
 
-Consider whether new information warrants changing your position.
-`;
-  }
+## Background
+${market.description?.trim() || "No additional description provided."}
 
-  return `## Prediction Market Question
+## Resolution
+This question resolves by ${fmtDate(market.end_date)}.
 
-**Question:** ${market.question}
-
-**Description:** ${market.description ?? "N/A"}
-
-**Current Market Prices:**
-- YES: $${market.yes_price?.toFixed(2) ?? "N/A"}
-- NO: $${market.no_price?.toFixed(2) ?? "N/A"}
-
-**24h Volume:** $${market.volume_24h?.toLocaleString() ?? "N/A"}
-**Market End Date:** ${market.end_date ?? "N/A"}
-**Market ID:** ${market.id}
-**Polymarket Slug:** ${market.slug ?? "N/A"}
-${previousBetsSection}
-Research this question using web search. Then provide your prediction as JSON.`;
+Research the question with web search, then return your independent probability that it resolves YES, a short reasoning, and the key factors.`;
 }
 
-// ---------------------------------------------------------------------------
-// Call a model via OpenRouter
-// ---------------------------------------------------------------------------
-export async function callModel(
-  openrouterId: string,
-  market: MarketRow,
-  previousBets?: PreviousBetContext[],
-): Promise<{
-  prediction: Prediction | null;
-  rawResponse: string;
+export interface ForecastResult {
+  ok: boolean;
+  prob: number | null;
+  reasoning: string | null;
+  keyFactors: string[] | null;
+  raw: string;
   cost: number;
   latencyMs: number;
-}> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY is not set");
-  }
+  error: string | null;
+  promptText: string;
+}
 
-  const userPrompt = buildPrompt(market, previousBets);
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Pull a forecast object out of model text even if it wrapped it in prose or
+// ```json fences (some models ignore strict JSON mode).
+function extractForecast(raw: string): unknown | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    /* fall through */
+  }
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1]);
+    } catch {
+      /* fall through */
+    }
+  }
+  const brace = raw.match(/\{[\s\S]*\}/);
+  if (brace) {
+    try {
+      return JSON.parse(brace[0]);
+    } catch {
+      /* fall through */
+    }
+  }
+  return null;
+}
+
+/**
+ * Ask one model for a BLIND probability forecast on a market.
+ * Never throws: failures come back as { ok: false, error } so the pipeline can
+ * record them visibly instead of silently coercing them into a default.
+ */
+export async function forecastMarket(
+  openrouterId: string,
+  market: MarketRow,
+): Promise<ForecastResult> {
+  const promptText = buildForecastPrompt(market);
+  const base: ForecastResult = {
+    ok: false,
+    prob: null,
+    reasoning: null,
+    keyFactors: null,
+    raw: "",
+    cost: 0,
+    latencyMs: 0,
+    error: null,
+    promptText,
+  };
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return { ...base, error: "OPENROUTER_API_KEY not set" };
 
   const body = {
     model: openrouterId,
-    plugins: [{ id: "web", max_results: 5 }],
+    // Force the Exa web engine for ALL models. Without `engine`, OpenRouter
+    // defaults to a model's NATIVE search where available -- which for Gemini
+    // means Google grounding (~$0.13/call, ~25x the others) and, on
+    // gemini-3.1-flash-lite, silently returns NO web results at all (the model
+    // then forecasts blind from stale training). Exa runs server-side for every
+    // model: uniform ~$0.005/call, real citations, and a level playing field so
+    // forecasters differ only in reasoning -- not in search backend.
+    plugins: [{ id: "web", engine: "exa", max_results: 4 }],
     temperature: 0,
-    max_tokens: 1024,
+    max_tokens: 1800,
+    usage: { include: true },
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
+      { role: "user", content: promptText },
     ],
-    response_format: {
-      type: "json_schema",
-      json_schema: PREDICTION_JSON_SCHEMA,
-    },
+    response_format: { type: "json_schema", json_schema: FORECAST_JSON_SCHEMA },
   };
 
-  let lastError: Error | null = null;
+  let lastError = "unknown error";
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const startMs = Date.now();
-
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
+      // On retry, drop strict json_schema in favour of plain json_object --
+      // some models reject the strict schema.
+      const reqBody =
+        attempt === 0
+          ? body
+          : { ...body, response_format: { type: "json_object" as const } };
+
       const res = await fetch(OPENROUTER_URL, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
           "HTTP-Referer": "https://llm-prediction-arena.vercel.app",
-          "X-Title": "LLM Prediction Arena",
+          "X-Title": "Wisdom of Artificial Crowds",
         },
-        body: JSON.stringify(
-          attempt === 0
-            ? body
-            : {
-                // Fallback: simpler json_object format on retry
-                ...body,
-                response_format: { type: "json_object" },
-              },
-        ),
+        body: JSON.stringify(reqBody),
+        signal: controller.signal,
       });
-
       const latencyMs = Date.now() - startMs;
 
-      if (res.status === 429) {
-        // Rate limited -- retry with backoff
+      // Retry transient errors; fail fast on the rest (e.g. 402 no credits).
+      if (res.status === 429 || res.status >= 500) {
+        lastError = `HTTP ${res.status}`;
         if (attempt < MAX_RETRIES) {
           await sleep(RETRY_DELAYS_MS[attempt]);
           continue;
         }
-        throw new Error("Rate limited after max retries");
+        return { ...base, latencyMs, error: `${lastError} after ${MAX_RETRIES} retries` };
       }
-
       if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`OpenRouter API error ${res.status}: ${errText}`);
+        const txt = await res.text();
+        return { ...base, latencyMs, error: `HTTP ${res.status}: ${txt.slice(0, 200)}` };
       }
 
       const data = await res.json();
-      const rawResponse = data.choices?.[0]?.message?.content ?? "";
-
-      // Calculate cost from usage
+      const msg = data.choices?.[0]?.message ?? {};
+      const raw: string = msg.content ?? "";
       const usage = data.usage ?? {};
-      const promptTokens = usage.prompt_tokens ?? 0;
-      const completionTokens = usage.completion_tokens ?? 0;
-      // OpenRouter returns cost in the generation object or we estimate
-      const cost =
-        data.usage?.total_cost ??
-        (promptTokens * 0.000001 + completionTokens * 0.000002);
+      const cost: number =
+        usage.cost ??
+        usage.total_cost ??
+        (usage.prompt_tokens ?? 0) * 1e-6 + (usage.completion_tokens ?? 0) * 2e-6;
 
-      // Parse and validate the prediction
-      let prediction: Prediction | null = null;
-      try {
-        const parsed = JSON.parse(rawResponse);
-        prediction = PredictionSchema.parse(parsed);
-      } catch {
-        // Could not parse valid prediction -- forced pass
-        prediction = null;
+      const parsed = extractForecast(raw);
+      const validated = parsed ? ForecastSchema.safeParse(parsed) : null;
+      if (!validated || !validated.success) {
+        // Couldn't parse a valid forecast. Retry once in json_object mode.
+        lastError = raw ? "unparseable forecast JSON" : "empty response";
+        if (attempt < MAX_RETRIES) {
+          await sleep(RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+        return { ...base, raw, cost, latencyMs, error: lastError };
       }
 
-      return { prediction, rawResponse, cost, latencyMs };
+      const prob = Math.min(1, Math.max(0, validated.data.probability_yes));
+      return {
+        ok: true,
+        prob,
+        reasoning: validated.data.reasoning,
+        keyFactors: validated.data.key_factors,
+        raw,
+        cost,
+        latencyMs,
+        error: null,
+        promptText,
+      };
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (attempt < MAX_RETRIES) {
+      const timedOut = controller.signal.aborted;
+      lastError = timedOut
+        ? `timeout after ${REQUEST_TIMEOUT_MS}ms`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      // Fail fast on a timeout: retrying just burns another full timeout
+      // window. Only retry genuine transient network errors.
+      if (!timedOut && attempt < MAX_RETRIES) {
         await sleep(RETRY_DELAYS_MS[attempt]);
         continue;
       }
+      return { ...base, latencyMs: Date.now() - startMs, error: lastError };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  throw lastError ?? new Error("callModel failed after retries");
+  return { ...base, error: lastError };
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export { buildPrompt, SYSTEM_PROMPT };
+export { SYSTEM_PROMPT };

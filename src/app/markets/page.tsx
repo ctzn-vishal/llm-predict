@@ -21,7 +21,7 @@ export default async function MarketsPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Markets</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Polymarket prediction markets used in the arena
+          Short-horizon Polymarket binary markets — the shared set every forecaster is scored on
         </p>
       </div>
 

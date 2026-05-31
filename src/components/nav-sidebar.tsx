@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Trophy,
+  Lightbulb,
   Swords,
   Calendar,
   BarChart3,
@@ -16,6 +17,7 @@ import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Leaderboard", icon: Trophy },
+  { href: "/analysis", label: "The Lesson", icon: Lightbulb },
   { href: "/arena", label: "Arena", icon: Swords },
   { href: "/cohorts", label: "Cohorts", icon: Calendar },
   { href: "/markets", label: "Markets", icon: TrendingUp },
@@ -61,7 +63,7 @@ export function NavSidebar() {
       </nav>
       <div className="border-t border-border px-4 py-3">
         <p className="text-xs text-muted-foreground">
-          7 models competing on Polymarket
+          6 LLMs + an ensemble vs. the crowd
         </p>
       </div>
     </aside>

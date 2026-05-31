@@ -18,8 +18,8 @@ export default async function CohortsPage() {
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Cohorts</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Weekly competition periods with fresh bankrolls and market selections
+        <p className="mt-1 text-sm text-muted-foreground">
+          Weekly competition periods — each draws a fresh set of short-horizon markets
         </p>
       </div>
       <CohortTimeline cohorts={cohorts} />

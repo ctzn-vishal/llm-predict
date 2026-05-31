@@ -15,20 +15,20 @@ export interface CostSummary {
 }
 
 /**
- * Get total API spend across all bets.
+ * Get total API spend across all forecasts.
  */
 export async function getTotalSpent(): Promise<number> {
   const row = await queryOne<{ total: number }>(
-    "SELECT COALESCE(SUM(api_cost), 0) as total FROM bets"
+    "SELECT COALESCE(SUM(api_cost), 0) as total FROM forecasts"
   );
   return row?.total ?? 0;
 }
 
 /**
  * Check if we can afford another round.
- * Estimates cost of a round at ~$3 (conservative) and checks against remaining budget.
+ * Estimates cost of a round at ~$2 (conservative) and checks against remaining budget.
  */
-export async function canAffordRound(estimatedCost = 3.0): Promise<boolean> {
+export async function canAffordRound(estimatedCost = 2.0): Promise<boolean> {
   const spent = await getTotalSpent();
   return spent + estimatedCost <= BUDGET_CAP_USD;
 }
@@ -46,29 +46,29 @@ export function getBudgetCap(): number {
 export async function getCostSummary(): Promise<CostSummary> {
   const totalSpent = await getTotalSpent();
 
-  // Per-model cost breakdown
+  // Per-forecaster cost breakdown (ensemble/crowd cost $0 by construction)
   const perModel = await queryAll<{ model_id: string; display_name: string; cost: number }>(
-    `SELECT b.model_id, m.display_name, COALESCE(SUM(b.api_cost), 0) as cost
-     FROM bets b
-     JOIN models m ON m.id = b.model_id
-     GROUP BY b.model_id
+    `SELECT f.forecaster_id AS model_id, m.display_name, COALESCE(SUM(f.api_cost), 0) as cost
+     FROM forecasts f
+     JOIN models m ON m.id = f.forecaster_id
+     GROUP BY f.forecaster_id
      ORDER BY cost DESC`
   );
 
   // Per-round cost
   const perRound = await queryAll<{ round_id: string; created_at: string; cost: number }>(
-    `SELECT b.round_id, r.created_at, COALESCE(SUM(b.api_cost), 0) as cost
-     FROM bets b
-     JOIN rounds r ON r.id = b.round_id
-     GROUP BY b.round_id
+    `SELECT f.round_id, r.created_at, COALESCE(SUM(f.api_cost), 0) as cost
+     FROM forecasts f
+     JOIN rounds r ON r.id = f.round_id
+     GROUP BY f.round_id
      ORDER BY r.created_at ASC`
   );
 
   // Daily cost aggregation
   const dailyRaw = await queryAll<{ date: string; cost: number }>(
-    `SELECT DATE(b.created_at) as date, COALESCE(SUM(b.api_cost), 0) as cost
-     FROM bets b
-     GROUP BY DATE(b.created_at)
+    `SELECT DATE(f.created_at) as date, COALESCE(SUM(f.api_cost), 0) as cost
+     FROM forecasts f
+     GROUP BY DATE(f.created_at)
      ORDER BY date ASC`
   );
 

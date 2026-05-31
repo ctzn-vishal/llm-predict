@@ -11,18 +11,35 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { MODEL_COLORS } from "@/lib/models";
-import { fmtDollars, fmtPct, fmtBrier } from "@/lib/format";
-import type { ModelStats } from "@/lib/schemas";
+import { fmtBrier, fmtSkill, fmtPct } from "@/lib/format";
+import type { ForecasterStats } from "@/lib/schemas";
 
-type SortKey = "bankroll" | "roi_pct" | "brier_score" | "win_rate" | "total_bets" | "pass_rate" | "resolved_bets";
+type SortKey =
+  | "skill_vs_crowd"
+  | "brier"
+  | "log_loss"
+  | "calibration_error"
+  | "resolution"
+  | "n_resolved"
+  | "ok_rate";
+
+// Metrics where a smaller number is better, so a first click should sort ascending.
+const LOWER_IS_BETTER: Record<SortKey, boolean> = {
+  skill_vs_crowd: false,
+  brier: true,
+  log_loss: true,
+  calibration_error: true,
+  resolution: false,
+  n_resolved: false,
+  ok_rate: false,
+};
 
 interface LeaderboardTableProps {
-  data: ModelStats[];
+  data: ForecasterStats[];
 }
 
 export function LeaderboardTable({ data }: LeaderboardTableProps) {
-  const [sortKey, setSortKey] = useState<SortKey>("roi_pct");
+  const [sortKey, setSortKey] = useState<SortKey>("skill_vs_crowd");
   const [sortAsc, setSortAsc] = useState(false);
 
   function handleSort(key: SortKey) {
@@ -30,87 +47,143 @@ export function LeaderboardTable({ data }: LeaderboardTableProps) {
       setSortAsc(!sortAsc);
     } else {
       setSortKey(key);
-      setSortAsc(key === "brier_score");
+      setSortAsc(LOWER_IS_BETTER[key]);
     }
   }
 
   const sorted = [...data].sort((a, b) => {
+    // Forecasters with nothing resolved yet always sink to the bottom.
+    const aEmpty = a.n_resolved === 0;
+    const bEmpty = b.n_resolved === 0;
+    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
     const mul = sortAsc ? 1 : -1;
     return mul * ((a[sortKey] ?? 0) - (b[sortKey] ?? 0));
   });
 
   function sortIcon(key: SortKey) {
     if (sortKey !== key) return null;
-    return sortAsc ? " \u25B2" : " \u25BC";
+    return sortAsc ? " ▲" : " ▼";
   }
 
-  const headerClass = "cursor-pointer select-none hover:text-foreground transition-colors";
+  const th = "cursor-pointer select-none whitespace-nowrap hover:text-foreground transition-colors";
 
   return (
     <div className="rounded-lg border border-border">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-12">#</TableHead>
-            <TableHead>Model</TableHead>
-            <TableHead className="text-right">Endowment</TableHead>
-            <TableHead className={headerClass} onClick={() => handleSort("bankroll")}>
-              Bankroll{sortIcon("bankroll")}
+            <TableHead className="w-10">#</TableHead>
+            <TableHead>Forecaster</TableHead>
+            <TableHead className={`text-right ${th}`} onClick={() => handleSort("skill_vs_crowd")}>
+              Skill vs Crowd{sortIcon("skill_vs_crowd")}
             </TableHead>
-            <TableHead className="text-right">Returns</TableHead>
-            <TableHead className={headerClass} onClick={() => handleSort("roi_pct")}>
-              ROI %{sortIcon("roi_pct")}
+            <TableHead className={`text-right ${th}`} onClick={() => handleSort("brier")}>
+              Brier{sortIcon("brier")}
             </TableHead>
-            <TableHead className={headerClass} onClick={() => handleSort("brier_score")}>
-              Brier{sortIcon("brier_score")}
+            <TableHead className={`text-right ${th}`} onClick={() => handleSort("log_loss")}>
+              Log Loss{sortIcon("log_loss")}
             </TableHead>
-            <TableHead className={headerClass} onClick={() => handleSort("win_rate")}>
-              Win Rate{sortIcon("win_rate")}
+            <TableHead className={`text-right ${th}`} onClick={() => handleSort("calibration_error")}>
+              ECE{sortIcon("calibration_error")}
             </TableHead>
-            <TableHead className={headerClass} onClick={() => handleSort("total_bets")}>
-              Bets (Res){sortIcon("total_bets")}
+            <TableHead className={`text-right ${th}`} onClick={() => handleSort("resolution")}>
+              Resolution{sortIcon("resolution")}
             </TableHead>
-            <TableHead className={headerClass} onClick={() => handleSort("pass_rate")}>
-              Pass %{sortIcon("pass_rate")}
+            <TableHead className={`text-right ${th}`} onClick={() => handleSort("n_resolved")}>
+              Forecasts{sortIcon("n_resolved")}
+            </TableHead>
+            <TableHead className={`text-right ${th}`} onClick={() => handleSort("ok_rate")}>
+              Reliability{sortIcon("ok_rate")}
             </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {sorted.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
-                No data yet. Run a round to populate the leaderboard.
+              <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
+                No resolved forecasts yet. Run a round and wait for markets to settle.
               </TableCell>
             </TableRow>
           )}
-          {sorted.map((m, i) => {
-            const colors = MODEL_COLORS[m.model_id];
+          {sorted.map((f, i) => {
+            const isCrowd = f.kind === "crowd";
+            const isEnsemble = f.kind === "ensemble";
+            const isModel = f.kind === "model";
+            const empty = f.n_resolved === 0;
+
+            const nameNode = (
+              <span className="flex items-center gap-2">
+                <span className="text-lg">{f.avatar_emoji}</span>
+                <span style={{ color: f.color, fontWeight: 600 }}>{f.display_name}</span>
+                {isCrowd && (
+                  <Badge variant="outline" className="text-[10px] font-normal">
+                    baseline
+                  </Badge>
+                )}
+                {isEnsemble && (
+                  <Badge variant="outline" className="border-amber-500/40 text-amber-400 text-[10px] font-normal">
+                    ensemble
+                  </Badge>
+                )}
+                {isModel && (
+                  <Badge variant="secondary" className="text-[10px] font-normal">
+                    {f.provider}
+                  </Badge>
+                )}
+              </span>
+            );
+
             return (
-              <TableRow key={m.model_id} className="hover:bg-accent/50">
+              <TableRow
+                key={f.forecaster_id}
+                className={
+                  isCrowd
+                    ? "bg-muted/30 hover:bg-muted/40"
+                    : isEnsemble
+                      ? "bg-amber-500/5 hover:bg-amber-500/10"
+                      : "hover:bg-accent/50"
+                }
+              >
                 <TableCell className="font-mono text-muted-foreground">{i + 1}</TableCell>
                 <TableCell>
-                  <Link href={`/models/${m.model_id}`} className="flex items-center gap-2 hover:underline">
-                    <span className="text-lg">{m.avatar_emoji}</span>
-                    <span className={colors?.text ?? "text-foreground"} style={{ fontWeight: 600 }}>
-                      {m.display_name}
+                  {isModel ? (
+                    <Link href={`/models/${f.forecaster_id}`} className="hover:underline">
+                      {nameNode}
+                    </Link>
+                  ) : (
+                    nameNode
+                  )}
+                </TableCell>
+                <TableCell className="text-right font-mono">
+                  {isCrowd || empty ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    <span className={f.skill_vs_crowd >= 0 ? "text-emerald-400" : "text-red-400"}>
+                      {fmtSkill(f.skill_vs_crowd)}
                     </span>
-                    <Badge variant="secondary" className="text-[10px] font-normal">
-                      {m.provider}
-                    </Badge>
-                  </Link>
+                  )}
                 </TableCell>
-                <TableCell className="font-mono text-right text-muted-foreground">{fmtDollars(m.initial_bankroll)}</TableCell>
-                <TableCell className="font-mono font-semibold">{fmtDollars(m.bankroll)}</TableCell>
-                <TableCell className={`font-mono text-right ${m.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                  {m.total_pnl >= 0 ? "+" : ""}{fmtDollars(m.total_pnl)}
+                <TableCell className="text-right font-mono font-semibold">
+                  {empty ? <span className="text-muted-foreground">—</span> : fmtBrier(f.brier)}
                 </TableCell>
-                <TableCell className={`font-mono ${m.roi_pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                  {m.roi_pct >= 0 ? "+" : ""}{fmtPct(m.roi_pct)}
+                <TableCell className="text-right font-mono text-muted-foreground">
+                  {empty ? "—" : f.log_loss.toFixed(3)}
                 </TableCell>
-                <TableCell className="font-mono">{fmtBrier(m.brier_score)}</TableCell>
-                <TableCell className="font-mono">{fmtPct(m.win_rate * 100)}</TableCell>
-                <TableCell className="font-mono">{m.total_bets} <span className="text-muted-foreground">({m.resolved_bets})</span></TableCell>
-                <TableCell className="font-mono text-muted-foreground">{fmtPct(m.pass_rate * 100)}</TableCell>
+                <TableCell className="text-right font-mono text-muted-foreground">
+                  {empty ? "—" : fmtBrier(f.calibration_error)}
+                </TableCell>
+                <TableCell className="text-right font-mono text-muted-foreground">
+                  {empty ? "—" : fmtBrier(f.resolution)}
+                </TableCell>
+                <TableCell className="text-right font-mono">
+                  {f.n_resolved}
+                  <span className="text-muted-foreground"> / {f.n_total}</span>
+                </TableCell>
+                <TableCell className="text-right font-mono">
+                  <span className={f.ok_rate >= 0.9 ? "text-foreground" : "text-amber-400"}>
+                    {fmtPct(f.ok_rate * 100)}
+                  </span>
+                </TableCell>
               </TableRow>
             );
           })}

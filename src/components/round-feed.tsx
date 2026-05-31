@@ -41,8 +41,10 @@ export function RoundFeed({ rounds }: RoundFeedProps) {
               className={
                 round.status === "completed"
                   ? "bg-emerald-500/20 text-emerald-400"
-                  : round.status === "running"
+                  : round.status === "in_progress"
                   ? "bg-yellow-500/20 text-yellow-400"
+                  : round.status === "partial"
+                  ? "bg-orange-500/20 text-orange-400"
                   : "bg-muted text-muted-foreground"
               }
             >

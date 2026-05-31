@@ -1,202 +1,126 @@
 import { queryAll, queryOne, run } from "./db";
-import type { BetRow, MarketRow } from "./schemas";
+import type { ForecastRow, MarketRow } from "./schemas";
 import { checkResolution } from "./polymarket";
+import { EPS } from "./scoring";
 
-/**
- * Calculate P&L for a settled bet.
- * bet_yes + resolved_yes: betAmount * (1/marketPrice - 1)
- * bet_yes + resolved_no:  -betAmount
- * bet_no  + resolved_no:  betAmount * (1/(1-marketPrice) - 1)
- * bet_no  + resolved_yes: -betAmount
- * pass: 0
- */
-export function calculatePnL(
-  action: string,
-  betAmount: number | null,
-  marketPriceAtBet: number | null,
-  resolvedOutcome: "yes" | "no"
-): number {
-  if (action === "pass" || betAmount == null || marketPriceAtBet == null) {
-    return 0;
-  }
-
-  if (action === "bet_yes") {
-    if (resolvedOutcome === "yes") {
-      return betAmount * (1 / marketPriceAtBet - 1);
-    } else {
-      return -betAmount;
-    }
-  }
-
-  if (action === "bet_no") {
-    if (resolvedOutcome === "no") {
-      return betAmount * (1 / (1 - marketPriceAtBet) - 1);
-    } else {
-      return -betAmount;
-    }
-  }
-
-  return 0;
+export function calculateBrier(prob: number, outcome: 0 | 1): number {
+  return (prob - outcome) ** 2;
 }
 
-/**
- * Calculate Brier score for a single prediction.
- * (estimatedProbability - actual)^2 where actual = 1 for yes, 0 for no
- */
-export function calculateBrierScore(
-  estimatedProbability: number,
-  resolvedOutcome: "yes" | "no"
-): number {
-  const actual = resolvedOutcome === "yes" ? 1 : 0;
-  return (estimatedProbability - actual) ** 2;
+// Log loss with clamping so a confident-and-wrong forecast gets a large (but
+// finite) penalty instead of Infinity.
+export function calculateLogLoss(prob: number, outcome: 0 | 1): number {
+  const p = Math.min(1 - EPS, Math.max(EPS, prob));
+  return outcome === 1 ? -Math.log(p) : -Math.log(1 - p);
 }
 
 export interface SettleResult {
-  settled: number;
+  marketsResolved: number;
+  marketsVoided: number;
+  forecastsScored: number;
 }
 
 /**
- * Settle all unresolved markets and update bet P&L and Brier scores.
+ * Settle forecasts whose markets have resolved.
+ *
+ * For each market with unsettled forecasts we ask Polymarket for resolution:
+ *  - resolved YES/NO: every valid forecast on that market is scored (Brier +
+ *    log loss), and the row's outcome is recorded. Failed forecasts (ok=0) are
+ *    still marked settled, but with NULL scores so they never silently count as
+ *    a correct/incorrect prediction.
+ *  - voided: the market is marked resolved=3 and all its forecasts are settled
+ *    with NULL outcome/scores -- excluded from the leaderboard entirely.
  */
-export async function settleMarkets(): Promise<SettleResult> {
-  // a. Query all unsettled bets (settled = 0, action != 'pass')
-  const unsettledBets = await queryAll<BetRow>(
-    "SELECT * FROM bets WHERE settled = 0 AND action != 'pass'"
+export async function settleForecasts(): Promise<SettleResult> {
+  const pending = await queryAll<{ market_id: string }>(
+    "SELECT DISTINCT market_id FROM forecasts WHERE settled = 0",
   );
-
-  if (unsettledBets.length === 0) {
-    return { settled: 0 };
+  if (pending.length === 0) {
+    return { marketsResolved: 0, marketsVoided: 0, forecastsScored: 0 };
   }
 
-  // b. Get unique market IDs from those bets
-  const marketIds = [...new Set(unsettledBets.map((b) => b.market_id))];
+  let marketsResolved = 0;
+  let marketsVoided = 0;
+  let forecastsScored = 0;
 
-  let settledCount = 0;
-
-  // c. For each market, check resolution
-  for (const marketId of marketIds) {
+  for (const { market_id } of pending) {
     const market = await queryOne<MarketRow>(
       "SELECT * FROM markets WHERE id = @id",
-      { id: marketId }
+      { id: market_id },
     );
     if (!market) continue;
 
-    const resolution = await checkResolution(marketId);
-    if (!resolution || !resolution.resolved || !resolution.outcome) continue;
+    let resolution: Awaited<ReturnType<typeof checkResolution>>;
+    try {
+      resolution = await checkResolution(market_id);
+    } catch {
+      continue; // transient API issue -- try again next settle pass
+    }
+    if (!resolution.resolved || !resolution.outcome) continue;
 
-    // Handle voided markets
+    // ----- Voided: refund nothing, score nothing. -----
     if (resolution.outcome === "voided") {
-      // Mark market as voided (resolved = 3)
       await run(
         "UPDATE markets SET resolved = 3, resolved_at = datetime('now') WHERE id = @id",
-        { id: marketId }
+        { id: market_id },
       );
-
-      // For each active bet on this market: settle with pnl=0, refund bet_amount
-      const marketBets = unsettledBets.filter((b) => b.market_id === marketId);
-      for (const bet of marketBets) {
-        await run(
-          "UPDATE bets SET settled = 1, pnl = 0, brier_score = NULL WHERE id = @id",
-          { id: bet.id }
-        );
-
-        // Refund the original bet_amount to bankroll
-        if (bet.bet_amount != null) {
-          await run(
-            "UPDATE cohort_models SET bankroll = bankroll + @amount WHERE cohort_id = @cohort_id AND model_id = @model_id",
-            { amount: bet.bet_amount, cohort_id: bet.cohort_id, model_id: bet.model_id }
-          );
-        }
-
-        settledCount++;
-      }
-
-      // Settle pass bets on this voided market
       await run(
-        "UPDATE bets SET settled = 1, pnl = 0, brier_score = NULL WHERE market_id = @market_id AND action = 'pass' AND settled = 0",
-        { market_id: marketId }
+        `UPDATE forecasts
+         SET settled = 1, outcome = NULL, brier = NULL, log_loss = NULL
+         WHERE market_id = @market_id AND settled = 0`,
+        { market_id },
       );
-
+      marketsVoided += 1;
       continue;
     }
 
-    const resolvedOutcome = resolution.outcome;
-    const resolvedValue = resolvedOutcome === "yes" ? 1 : 2;
-
-    // d. Update markets table
+    // ----- Resolved YES / NO. -----
+    const y: 0 | 1 = resolution.outcome === "yes" ? 1 : 0;
     await run(
       "UPDATE markets SET resolved = @resolved, resolved_at = datetime('now') WHERE id = @id",
-      { resolved: resolvedValue, id: marketId }
+      { resolved: y === 1 ? 1 : 2, id: market_id },
     );
 
-    // e. For each bet on this market
-    const marketBets = unsettledBets.filter((b) => b.market_id === marketId);
-    for (const bet of marketBets) {
-      // Calculate P&L
-      const pnl = calculatePnL(
-        bet.action,
-        bet.bet_amount,
-        bet.market_price_at_bet,
-        resolvedOutcome
-      );
+    const rows = await queryAll<ForecastRow>(
+      "SELECT * FROM forecasts WHERE market_id = @market_id AND settled = 0",
+      { market_id },
+    );
 
-      // Calculate Brier score
-      const brierScore =
-        bet.estimated_probability != null
-          ? calculateBrierScore(bet.estimated_probability, resolvedOutcome)
-          : null;
-
-      // Update bet
-      await run(
-        "UPDATE bets SET settled = 1, pnl = @pnl, brier_score = @brier_score WHERE id = @id",
-        { pnl, brier_score: brierScore, id: bet.id }
-      );
-
-      // Add P&L back to bankroll (winnings added, losses already deducted at bet time)
-      // FIX: We need to credit the principal (bet_amount) + PnL.
-      // Logic:
-      // - Validation: bet_amount was deducted at bet time.
-      // - Win: PnL is positive. We return bet_amount + PnL.
-      // - Loss: PnL is negative (-bet_amount). We return bet_amount + (-bet_amount) = 0.
-      // Wait, let's re-verify the PnL calculation in calculatePnL.
-      // calculatePnL returns pure profit/loss.
-      // If Win: PnL = bet * (odds - 1). Total back = bet + PnL.
-      // If Loss: PnL = -bet. Total back = bet + (-bet) = 0.
-      // So we should ALWAYS add back (bet_amount + pnl).
-      // If we only add PnL:
-      // - Win: Bankroll += Profit. Principal is lost. Incorrect.
-      // - Loss: Bankroll += -Bet. Principal lost twice. Incorrect.
-
-      if (bet.bet_amount != null) {
-        const creditAmount = bet.bet_amount + pnl;
+    for (const f of rows) {
+      if (f.ok === 1 && f.prob_yes != null) {
         await run(
-          "UPDATE cohort_models SET bankroll = bankroll + @amount WHERE cohort_id = @cohort_id AND model_id = @model_id",
-          { amount: creditAmount, cohort_id: bet.cohort_id, model_id: bet.model_id }
+          `UPDATE forecasts
+           SET settled = 1, outcome = @outcome, brier = @brier, log_loss = @log_loss
+           WHERE id = @id`,
+          {
+            id: f.id,
+            outcome: y,
+            brier: calculateBrier(f.prob_yes, y),
+            log_loss: calculateLogLoss(f.prob_yes, y),
+          },
         );
+        forecastsScored += 1;
       } else {
-        // Fallback if bet_amount is null (shouldn't happen for active bets)
+        // Failed forecast: record the outcome for context, but no score.
         await run(
-          "UPDATE cohort_models SET bankroll = bankroll + @pnl WHERE cohort_id = @cohort_id AND model_id = @model_id",
-          { pnl, cohort_id: bet.cohort_id, model_id: bet.model_id }
+          `UPDATE forecasts
+           SET settled = 1, outcome = @outcome, brier = NULL, log_loss = NULL
+           WHERE id = @id`,
+          { id: f.id, outcome: y },
         );
       }
-
-      settledCount++;
     }
-
-    // Settle pass bets on this resolved market
-    await run(
-      "UPDATE bets SET settled = 1, pnl = 0, brier_score = NULL WHERE market_id = @market_id AND action = 'pass' AND settled = 0",
-      { market_id: marketId }
-    );
+    marketsResolved += 1;
   }
 
-  // f. Check if any "settling" cohorts can be marked "completed"
+  // A "settling" cohort is done once none of its forecasts remain unsettled.
   await run(
     `UPDATE cohorts SET status = 'completed'
      WHERE status = 'settling'
-     AND NOT EXISTS (SELECT 1 FROM bets WHERE cohort_id = cohorts.id AND settled = 0)`
+       AND NOT EXISTS (
+         SELECT 1 FROM forecasts WHERE cohort_id = cohorts.id AND settled = 0
+       )`,
   );
 
-  return { settled: settledCount };
+  return { marketsResolved, marketsVoided, forecastsScored };
 }

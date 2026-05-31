@@ -94,67 +94,113 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_bets_settled ON bets(settled)`,
   `CREATE INDEX IF NOT EXISTS idx_markets_resolved ON markets(resolved)`,
   `CREATE INDEX IF NOT EXISTS idx_rounds_cohort ON rounds(cohort_id)`,
+  // -------------------------------------------------------------------------
+  // forecasts: the redesigned mechanic (blind probability forecasts).
+  // One row per (round, market, forecaster). Forecasters = the 6 models, plus
+  // the synthetic 'ensemble' (mean) and 'crowd' (market price baseline).
+  // Failures are VISIBLE: ok=0 with an `error` reason -- never coerced to a pass.
+  // -------------------------------------------------------------------------
+  `CREATE TABLE IF NOT EXISTS forecasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id TEXT NOT NULL,
+    cohort_id TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    forecaster_id TEXT NOT NULL,
+    forecaster_kind TEXT NOT NULL DEFAULT 'model',  -- 'model' | 'ensemble' | 'crowd'
+    prob_yes REAL,                                   -- forecast P(YES), [0,1]
+    reasoning TEXT,
+    key_factors TEXT,                                -- JSON array
+    crowd_price REAL,                                -- market YES price at forecast time (hidden from models)
+    prompt_text TEXT,
+    raw_response TEXT,
+    ok INTEGER NOT NULL DEFAULT 0,                   -- 1 = valid forecast produced
+    error TEXT,                                      -- failure reason when ok=0
+    api_cost REAL DEFAULT 0,
+    api_latency_ms INTEGER DEFAULT 0,
+    settled INTEGER NOT NULL DEFAULT 0,
+    outcome INTEGER,                                 -- 1=yes, 0=no (NULL until resolved/void)
+    brier REAL,                                      -- (prob_yes - outcome)^2
+    log_loss REAL,                                   -- -[y*ln p + (1-y)*ln(1-p)]
+    created_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_forecasts_round ON forecasts(round_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_forecasts_market ON forecasts(market_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_forecasts_forecaster ON forecasts(forecaster_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_forecasts_cohort ON forecasts(cohort_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_forecasts_settled ON forecasts(settled)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_forecasts_unique ON forecasts(round_id, market_id, forecaster_id)`,
 ];
 
 // ---------------------------------------------------------------------------
 // Seed data
 // ---------------------------------------------------------------------------
+// Refreshed 2026-05: cheap, current, provider-diverse models verified on
+// OpenRouter. Plus two synthetic forecasters: 'ensemble' (mean of the models)
+// and 'crowd' (the Polymarket price, our baseline to beat).
 const MODELS = [
   {
-    id: "gemini-3-flash",
-    display_name: "Gemini 3 Flash",
-    provider: "Google",
-    openrouter_id: "google/gemini-3-flash-preview",
-    avatar_emoji: "💎",
-    color: "#4285F4",
-  },
-  {
-    id: "grok-4.1-fast",
-    display_name: "Grok 4.1 Fast",
-    provider: "xAI",
-    openrouter_id: "x-ai/grok-4.1-fast",
-    avatar_emoji: "⚡",
-    color: "#8B5CF6",
-  },
-  {
-    id: "gpt-5.2-chat",
-    display_name: "GPT-5.2 Chat",
-    provider: "OpenAI",
-    openrouter_id: "openai/gpt-5.2-chat",
-    avatar_emoji: "🧠",
-    color: "#10A37F",
-  },
-  {
-    id: "deepseek-v3.2",
-    display_name: "DeepSeek V3.2",
+    id: "deepseek-v4-flash",
+    display_name: "DeepSeek V4 Flash",
     provider: "DeepSeek",
-    openrouter_id: "deepseek/deepseek-v3.2",
+    openrouter_id: "deepseek/deepseek-v4-flash",
     avatar_emoji: "🔮",
     color: "#FF6B35",
   },
   {
-    id: "kimi-k2.5",
-    display_name: "Kimi K2.5",
-    provider: "Moonshot AI",
-    openrouter_id: "moonshotai/kimi-k2.5",
-    avatar_emoji: "🌙",
-    color: "#EC4899",
-  },
-  {
-    id: "qwen-3",
-    display_name: "Qwen 3",
+    id: "qwen3-235b",
+    display_name: "Qwen3 235B",
     provider: "Alibaba",
-    openrouter_id: "qwen/qwen3-235b-a22b",
+    openrouter_id: "qwen/qwen3-235b-a22b-2507",
     avatar_emoji: "🐲",
     color: "#06B6D4",
   },
   {
+    id: "seed-1.6-flash",
+    display_name: "Seed 1.6 Flash",
+    provider: "ByteDance",
+    openrouter_id: "bytedance-seed/seed-1.6-flash",
+    avatar_emoji: "🌱",
+    color: "#EC4899",
+  },
+  {
+    id: "gpt-oss-120b",
+    display_name: "GPT-OSS 120B",
+    provider: "OpenAI",
+    openrouter_id: "openai/gpt-oss-120b",
+    avatar_emoji: "🧠",
+    color: "#10A37F",
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    display_name: "Gemini 3.1 Flash Lite",
+    provider: "Google",
+    openrouter_id: "google/gemini-3.1-flash-lite",
+    avatar_emoji: "💎",
+    color: "#4285F4",
+  },
+  {
+    id: "mistral-small-3.2",
+    display_name: "Mistral Small 3.2",
+    provider: "Mistral",
+    openrouter_id: "mistralai/mistral-small-3.2-24b-instruct",
+    avatar_emoji: "🌀",
+    color: "#8B5CF6",
+  },
+  {
     id: "ensemble",
-    display_name: "Ensemble (Avg)",
+    display_name: "Ensemble",
     provider: "Aggregate",
     openrouter_id: "ensemble",
     avatar_emoji: "🎯",
     color: "#F59E0B",
+  },
+  {
+    id: "crowd",
+    display_name: "The Crowd",
+    provider: "Polymarket",
+    openrouter_id: "crowd",
+    avatar_emoji: "👥",
+    color: "#94A3B8",
   },
 ];
 

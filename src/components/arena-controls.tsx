@@ -20,7 +20,10 @@ export function ArenaControls() {
       }
       const data = await res.json();
       setStatus("done");
-      setResult(`Round ${data.round_id?.slice(0, 8) ?? ""} completed with ${data.bet_count ?? 0} bets across ${data.market_count ?? 0} markets.`);
+      setResult(
+        `Round ${data.roundId?.slice(0, 8) ?? ""}: ${data.okCount ?? 0} valid forecasts` +
+          `${data.failCount ? `, ${data.failCount} failed` : ""} across ${data.marketCount ?? 0} markets.`,
+      );
     } catch (e: unknown) {
       setStatus("error");
       setResult(e instanceof Error ? e.message : "Unknown error");
@@ -50,7 +53,7 @@ export function ArenaControls() {
             <div>
               <p className="text-sm font-medium text-yellow-400">Round in progress</p>
               <p className="text-xs text-muted-foreground">
-                All 7 models are analyzing markets and placing bets. This may take 30-60 seconds.
+                Six models are making blind forecasts on each market. This may take 30-60 seconds.
               </p>
             </div>
           </CardContent>

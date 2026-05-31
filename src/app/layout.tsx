@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "LLM Prediction Arena",
   description:
-    "Frontier LLMs compete on real Polymarket prediction markets, scored on calibration and portfolio returns.",
+    "Can AI beat the crowd? Six LLMs make blind forecasts on live prediction markets, scored on calibration and skill vs. the market price — and we test whether pooling them into an ensemble wins.",
 };
 
 export default function RootLayout({

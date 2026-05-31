@@ -1,57 +1,54 @@
 import Link from "next/link";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LeaderboardTable } from "@/components/leaderboard-table";
 import { RoundFeed } from "@/components/round-feed";
-import { PortfolioChart } from "@/components/portfolio-chart";
-import { fmtDateShort } from "@/lib/format";
-import type { CohortRow, ModelStats, RoundRow } from "@/lib/schemas";
+import { fmtDateShort, fmtBrier } from "@/lib/format";
+import { getLeaderboard, getEnsembleComparison } from "@/lib/scoring";
+import { queryAll, queryOne } from "@/lib/db";
+import type { CohortRow, RoundRow } from "@/lib/schemas";
 
-interface CohortDetailData {
-  cohort: CohortRow | null;
-  leaderboard: ModelStats[];
-  rounds: RoundRow[];
-  timeline: { date: string;[key: string]: number | string }[];
-}
+export const dynamic = "force-dynamic";
 
-async function fetchCohortDetail(id: string): Promise<CohortDetailData> {
-  const base = process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000";
+async function fetchCohort(id: string) {
   try {
-    const res = await fetch(`${base}/api/cohorts/${id}`, { cache: "no-store" });
-    if (!res.ok) return { cohort: null, leaderboard: [], rounds: [], timeline: [] };
-    const data = await res.json();
-    return {
-      cohort: data.cohort ?? null,
-      leaderboard: data.leaderboard ?? [],
-      rounds: data.rounds ?? [],
-      timeline: data.timeline ?? [],
-    };
-  } catch {
-    return { cohort: null, leaderboard: [], rounds: [], timeline: [] };
+    const cohort = await queryOne<CohortRow>("SELECT * FROM cohorts WHERE id = @id", { id });
+    if (!cohort) return null;
+    const [leaderboard, comparison, rounds] = await Promise.all([
+      getLeaderboard(id),
+      getEnsembleComparison(id),
+      queryAll<RoundRow>(
+        "SELECT * FROM rounds WHERE cohort_id = @id ORDER BY created_at DESC",
+        { id },
+      ),
+    ]);
+    return { cohort, leaderboard, comparison, rounds };
+  } catch (error) {
+    console.error("Error fetching cohort:", error);
+    return null;
   }
 }
 
 export default async function CohortDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { cohort, leaderboard, rounds, timeline } = await fetchCohortDetail(id);
+  const data = await fetchCohort(id);
 
-  if (!cohort) {
+  if (!data) {
     return (
       <div className="space-y-4">
         <Link href="/cohorts" className="text-sm text-muted-foreground hover:underline">
           &larr; Back to cohorts
         </Link>
-        <p className="text-muted-foreground py-8 text-center">Cohort not found.</p>
+        <p className="py-8 text-center text-muted-foreground">Cohort not found.</p>
       </div>
     );
   }
 
+  const { cohort, leaderboard, comparison, rounds } = data;
   const isActive = cohort.status === "active";
-
-  const chartModels = leaderboard.map(m => ({
-    id: m.model_id,
-    name: m.display_name,
-    color: m.color
-  }));
+  const hasData = comparison.nMarkets > 0;
+  const ensembleSkill = comparison.crowdBrier - comparison.ensembleBrier;
+  const ensembleWins = ensembleSkill > 0;
 
   return (
     <div className="space-y-8">
@@ -59,39 +56,66 @@ export default async function CohortDetailPage({ params }: { params: Promise<{ i
         <Link href="/cohorts" className="text-sm text-muted-foreground hover:underline">
           &larr; Back to cohorts
         </Link>
-        <div className="flex items-center gap-3 mt-2">
+        <div className="mt-2 flex items-center gap-3">
           <h1 className="text-2xl font-bold tracking-tight">
-            {fmtDateShort(cohort.start_date)} - {fmtDateShort(cohort.end_date)}
+            {fmtDateShort(cohort.start_date)} – {fmtDateShort(cohort.end_date)}
           </h1>
           <Badge
             className={
-              isActive
-                ? "bg-emerald-500/20 text-emerald-400"
-                : "bg-muted text-muted-foreground"
+              isActive ? "bg-emerald-500/20 text-emerald-400" : "bg-muted text-muted-foreground"
             }
           >
             {cohort.status}
           </Badge>
         </div>
-        <p className="text-sm text-muted-foreground mt-1">
-          {cohort.market_count} markets | ID: {cohort.id.slice(0, 8)}
+        <p className="mt-1 text-sm text-muted-foreground">
+          {cohort.market_count} markets · {cohort.id}
         </p>
       </div>
 
-      <div className="h-[400px]">
-        <PortfolioChart data={timeline} models={chartModels} />
-      </div>
+      {hasData && (
+        <Card className={ensembleWins ? "border-emerald-500/40" : "border-amber-500/40"}>
+          <CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-lg font-bold">
+              {ensembleWins ? (
+                <>
+                  The <span className="text-amber-400">ensemble</span> beat the{" "}
+                  <span className="text-slate-300">crowd</span> this cohort
+                </>
+              ) : (
+                <>
+                  The <span className="text-slate-300">crowd</span> held off the{" "}
+                  <span className="text-amber-400">ensemble</span> this cohort
+                </>
+              )}
+            </p>
+            <div className="flex gap-6 font-mono text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">Ensemble</p>
+                <p className="text-lg font-semibold text-amber-400">{fmtBrier(comparison.ensembleBrier)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Crowd</p>
+                <p className="text-lg font-semibold text-slate-300">{fmtBrier(comparison.crowdBrier)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Markets</p>
+                <p className="text-lg font-semibold">{comparison.nMarkets}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div>
-        <h2 className="text-lg font-semibold mb-4">Leaderboard</h2>
+        <h2 className="mb-4 text-lg font-semibold">Skill leaderboard</h2>
         <LeaderboardTable data={leaderboard} />
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold mb-4">Rounds</h2>
+        <h2 className="mb-4 text-lg font-semibold">Rounds</h2>
         <RoundFeed rounds={rounds} />
       </div>
     </div>
   );
 }
-
