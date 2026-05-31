@@ -19,13 +19,17 @@ export interface RoundResult {
 const MIN_HORIZON_DAYS = 1;
 const MAX_HORIZON_DAYS = 45;
 const ONE_DAY_MS = 86_400_000;
+// Soft per-category cap within a round, so one hot news cycle can't dominate the
+// 12 markets we forecast. Diversity matters for the "independent errors cancel"
+// story: a round that is all one topic measures one correlated bet, not breadth.
+const MAX_PER_CATEGORY = 3;
 // How many markets to forecast concurrently. Each market fans out to the 6
 // model forecasters in parallel, so this caps in-flight OpenRouter calls at
 // ~MARKET_CONCURRENCY * 6. We keep this at 3: a full 12-market round then runs
 // in 4 waves, comfortably under the serverless 300s budget given the 30s
-// per-attempt fail-fast in openrouter.ts. (gpt-oss-120b is the only remaining
-// model that occasionally times out; failures are recorded visibly with ok=0
-// and excluded from scoring rather than coerced to a default.)
+// per-attempt fail-fast in openrouter.ts. Any model that blows the timeout or
+// returns unparseable JSON is recorded visibly with ok=0 and excluded from
+// scoring rather than coerced to a default.
 const MARKET_CONCURRENCY = 3;
 
 /**
@@ -39,7 +43,7 @@ function selectRoundMarkets(allMarkets: MarketRow[], count = 12): MarketRow[] {
   const now = Date.now();
   const minMs = MIN_HORIZON_DAYS * ONE_DAY_MS;
   const maxMs = MAX_HORIZON_DAYS * ONE_DAY_MS;
-  return allMarkets
+  const eligible = allMarkets
     .filter((m) => {
       if (m.resolved !== 0) return false;
       if (m.yes_price == null) return false;
@@ -51,8 +55,31 @@ function selectRoundMarkets(allMarkets: MarketRow[], count = 12): MarketRow[] {
       if (horizon < minMs || horizon > maxMs) return false;
       return true;
     })
-    .sort((a, b) => (b.volume_24h ?? 0) - (a.volume_24h ?? 0))
-    .slice(0, count);
+    .sort((a, b) => (b.volume_24h ?? 0) - (a.volume_24h ?? 0));
+
+  // Soft per-category cap: prefer a spread of topics, but backfill from the
+  // held-back overflow so we still return `count` markets when one news cycle
+  // dominates the eligible pool. `category` is the parent event's primary tag
+  // (persisted at sync); null falls back to a shared "uncategorized" bucket.
+  const perCategory = new Map<string, number>();
+  const picked: MarketRow[] = [];
+  const overflow: MarketRow[] = [];
+  for (const m of eligible) {
+    if (picked.length >= count) break;
+    const cat = m.category ?? "uncategorized";
+    const n = perCategory.get(cat) ?? 0;
+    if (n >= MAX_PER_CATEGORY) {
+      overflow.push(m);
+      continue;
+    }
+    perCategory.set(cat, n + 1);
+    picked.push(m);
+  }
+  for (const m of overflow) {
+    if (picked.length >= count) break;
+    picked.push(m);
+  }
+  return picked;
 }
 
 interface ForecastInsert {

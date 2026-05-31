@@ -78,7 +78,7 @@ We deliberately pick capable but inexpensive recent models, and lean on **provid
 | 🔮 DeepSeek V4 Flash | DeepSeek | CN | `deepseek/deepseek-v4-flash` | $0.10 / $0.20 |
 | 🐲 Qwen3 235B | Alibaba | CN | `qwen/qwen3-235b-a22b-2507` | $0.071 / $0.10 |
 | 🌱 Seed 1.6 Flash | ByteDance | CN | `bytedance-seed/seed-1.6-flash` | $0.075 / $0.30 |
-| 🧠 GPT-OSS 120B | OpenAI | US | `openai/gpt-oss-120b` | $0.04 / $0.18 |
+| 🧠 GPT-4.1 Mini | OpenAI | US | `openai/gpt-4.1-mini` | $0.40 / $1.60 |
 | 💎 Gemini 3.1 Flash Lite | Google | US | `google/gemini-3.1-flash-lite` | $0.25 / $1.50 |
 | 🌀 Mistral Small 3.2 | Mistral | EU | `mistralai/mistral-small-3.2-24b-instruct` | $0.075 / $0.20 |
 | 🎯 **Ensemble** | Aggregate | — | *computed* | **$0.00** |

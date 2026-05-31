@@ -96,6 +96,8 @@ export interface MarketSelectOptions {
   maxPrice?: number;
   /** Cap markets taken from a single event, for topic diversity. */
   maxPerEvent?: number;
+  /** Soft cap on markets sharing a primary category, so one hot topic can't flood the cohort. */
+  maxPerCategory?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +122,7 @@ export function selectForecastableMarkets(
     minPrice = 0.05,
     maxPrice = 0.95,
     maxPerEvent = 1,
+    maxPerCategory = 5,
   } = opts;
 
   const now = Date.now();
@@ -159,16 +162,43 @@ export function selectForecastableMarkets(
     }
   }
 
-  // Highest 24h volume first, then take at most `maxPerEvent` per event.
+  // Highest 24h volume first.
   candidates.sort((a, b) => b.vol - a.vol);
+
+  // Pass 1 (hard cap): at most `maxPerEvent` markets per event, so a single
+  // multi-candidate event (e.g. an election with one market per candidate)
+  // can't dominate.
   const perEvent = new Map<string, number>();
-  const picked: ForecastableMarket[] = [];
+  const deduped: ForecastableMarket[] = [];
   for (const c of candidates) {
-    if (picked.length >= count) break;
     const n = perEvent.get(c.eventId) ?? 0;
     if (n >= maxPerEvent) continue;
     perEvent.set(c.eventId, n + 1);
-    picked.push(c.market);
+    deduped.push(c.market);
+  }
+
+  // Pass 2 (soft cap): prefer a spread of categories so one hot news cycle
+  // (e.g. a geopolitics flashpoint that spawns a dozen distinct events) can't
+  // flood the cohort. Markets that overflow the per-category cap are held back
+  // and only used to backfill if we'd otherwise fall short of `count` --
+  // diversity first, but never starve the DB pool.
+  const perCategory = new Map<string, number>();
+  const picked: ForecastableMarket[] = [];
+  const overflow: ForecastableMarket[] = [];
+  for (const m of deduped) {
+    if (picked.length >= count) break;
+    const cat = m.category ?? "uncategorized";
+    const cn = perCategory.get(cat) ?? 0;
+    if (cn >= maxPerCategory) {
+      overflow.push(m);
+      continue;
+    }
+    perCategory.set(cat, cn + 1);
+    picked.push(m);
+  }
+  for (const m of overflow) {
+    if (picked.length >= count) break;
+    picked.push(m);
   }
   return picked;
 }
@@ -196,10 +226,10 @@ export async function syncMarkets(): Promise<number> {
       await run(
         `INSERT OR REPLACE INTO markets
            (id, question, description, slug, condition_id,
-            yes_price, no_price, volume_24h, end_date, fetched_at)
+            yes_price, no_price, volume_24h, end_date, category, fetched_at)
          VALUES
            (@id, @question, @description, @slug, @condition_id,
-            @yes_price, @no_price, @volume_24h, @end_date, datetime('now'))`,
+            @yes_price, @no_price, @volume_24h, @end_date, @category, datetime('now'))`,
         {
           id: String(m.id),
           question: m.question,
@@ -210,6 +240,7 @@ export async function syncMarkets(): Promise<number> {
           no_price: noPrice,
           volume_24h: m.volume24hr,
           end_date: m.endDateIso ?? null,
+          category: m.category ?? null,
         },
         tx,
       );

@@ -53,6 +53,7 @@ const SCHEMA_STATEMENTS = [
     no_price REAL,
     volume_24h REAL,
     end_date TEXT,
+    category TEXT,
     resolved INTEGER DEFAULT 0,
     resolved_at TEXT,
     fetched_at TEXT DEFAULT (datetime('now'))
@@ -163,10 +164,10 @@ const MODELS = [
     color: "#EC4899",
   },
   {
-    id: "gpt-oss-120b",
-    display_name: "GPT-OSS 120B",
+    id: "gpt-4.1-mini",
+    display_name: "GPT-4.1 Mini",
     provider: "OpenAI",
-    openrouter_id: "openai/gpt-oss-120b",
+    openrouter_id: "openai/gpt-4.1-mini",
     avatar_emoji: "🧠",
     color: "#10A37F",
   },
@@ -223,6 +224,20 @@ async function doInit(): Promise<void> {
   const c = getClient();
   for (const sql of SCHEMA_STATEMENTS) {
     await c.execute(sql);
+  }
+  // Idempotent column additions for DBs created before a column existed.
+  // CREATE TABLE IF NOT EXISTS won't alter an existing table, so a production
+  // table that predates the column needs this explicit ALTER (guarded by a
+  // PRAGMA check so it runs at most once).
+  const columnMigrations = [
+    { table: "markets", column: "category", ddl: "ALTER TABLE markets ADD COLUMN category TEXT" },
+  ];
+  for (const mig of columnMigrations) {
+    const info = await c.execute(`PRAGMA table_info(${mig.table})`);
+    const exists = info.rows.some(
+      (r) => (r as unknown as { name: string }).name === mig.column,
+    );
+    if (!exists) await c.execute(mig.ddl);
   }
   for (const model of MODELS) {
     await c.execute({

@@ -7,7 +7,7 @@ const CANDIDATES = [
   "deepseek/deepseek-v3.2",
   "qwen/qwen3.5-flash-02-23",
   "qwen/qwen3-235b-a22b-2507",
-  "openai/gpt-oss-120b",
+  "openai/gpt-4.1-mini",
   "google/gemini-3-flash-preview",
   "moonshotai/kimi-k2.5",
   "z-ai/glm-4-32b",

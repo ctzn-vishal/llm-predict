@@ -59,6 +59,7 @@ export interface MarketRow {
   no_price: number | null;
   volume_24h: number | null;
   end_date: string | null;
+  category: string | null; // primary topic tag from the parent event (drives round topic-diversity)
   resolved: number; // 0=open, 1=resolved_yes, 2=resolved_no, 3=voided
   resolved_at: string | null;
   fetched_at: string;
