@@ -135,6 +135,32 @@ export default function MethodologyPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle className="text-lg">Market × Models (the hybrid)</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
+          <p>
+            One forecaster on the leaderboard is deliberately <em>not</em> blind.{" "}
+            <strong className="text-foreground">Market × Models</strong> blends the market price
+            with the model consensus in log-odds space:{" "}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">
+              logit(p) = 0.8 · logit(price) + 0.2 · mean(logit(p_model))
+            </code>
+            . The 80/20 split and the log-odds scale come from a backtest on the arena&apos;s own
+            settled forecasts (see{" "}
+            <a href="/insights" className="text-primary hover:underline">
+              Findings
+            </a>
+            ), where this blend scored a better Brier than the market price alone. Its job on the
+            leaderboard is to keep testing that claim out of sample: if the models truly add
+            information the market hasn&apos;t priced, Market × Models should keep beating the
+            crowd going forward. Its forecasts cost nothing — they are pure arithmetic over
+            numbers the arena already stores.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-lg">Failures are visible, never hidden</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">

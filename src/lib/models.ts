@@ -23,6 +23,10 @@ export const FORECASTERS: ForecasterMeta[] = [
   { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite", provider: "Google", emoji: "💎", color: "#4285F4", kind: "model", region: "US", costIn: 0.25, costOut: 1.50 },
   { id: "mistral-small-3.2", name: "Mistral Small 3.2", provider: "Mistral", emoji: "🌀", color: "#8B5CF6", kind: "model", region: "EU", costIn: 0.075, costOut: 0.20 },
   { id: "ensemble", name: "Ensemble", provider: "Aggregate", emoji: "🎯", color: "#F59E0B", kind: "ensemble" },
+  // Market × Models: NOT blind -- anchors on the market price (w=0.8) and nudges
+  // it with the model consensus in logit space. The live test of whether cheap
+  // LLMs add information the market hasn't priced in. See lib/aggregators.ts.
+  { id: "hybrid", name: "Market × Models", provider: "Aggregate", emoji: "⚡", color: "#F43F5E", kind: "ensemble" },
   { id: "crowd", name: "The Crowd", provider: "Polymarket", emoji: "👥", color: "#94A3B8", kind: "crowd" },
 ];
 
@@ -55,6 +59,7 @@ export const MODEL_COLORS: Record<string, { primary: string; bg: string; text: s
   "gemini-3.1-flash-lite": { primary: "#4285F4", bg: "bg-blue-500/10", text: "text-blue-400" },
   "mistral-small-3.2": { primary: "#8B5CF6", bg: "bg-violet-500/10", text: "text-violet-400" },
   ensemble: { primary: "#F59E0B", bg: "bg-amber-500/10", text: "text-amber-400" },
+  hybrid: { primary: "#F43F5E", bg: "bg-rose-500/10", text: "text-rose-400" },
   crowd: { primary: "#94A3B8", bg: "bg-slate-500/10", text: "text-slate-300" },
 };
 

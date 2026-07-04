@@ -196,6 +196,14 @@ const MODELS = [
     color: "#F59E0B",
   },
   {
+    id: "hybrid",
+    display_name: "Market × Models",
+    provider: "Aggregate",
+    openrouter_id: "hybrid",
+    avatar_emoji: "⚡",
+    color: "#F43F5E",
+  },
+  {
     id: "crowd",
     display_name: "The Crowd",
     provider: "Polymarket",

@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { queryAll, queryOne, run } from "./db";
 import type { CohortRow, ForecasterKind, MarketRow, ModelRow } from "./schemas";
 import { forecastMarket } from "./openrouter";
+import { HYBRID_CROWD_WEIGHT, hybridProb } from "./aggregators";
 
 export interface RoundResult {
   roundId: string;
@@ -140,9 +141,10 @@ interface MarketTotals {
 }
 
 /**
- * Forecast a single market: every model forecaster in parallel, then the two
- * computed forecasters (`ensemble` = mean of valid model probs, `crowd` = the
- * Polymarket price). Returns per-market tallies so the caller can aggregate
+ * Forecast a single market: every model forecaster in parallel, then the three
+ * computed forecasters (`ensemble` = mean of valid model probs, `hybrid` =
+ * logit blend of market price and model consensus, `crowd` = the Polymarket
+ * price). Returns per-market tallies so the caller can aggregate
  * across markets that run concurrently. Failures are stored with ok=0 and an
  * error reason -- never silently coerced into a default.
  */
@@ -238,7 +240,41 @@ async function processMarket(
   }
   forecastCount += 1;
 
-  // c. Crowd = the Polymarket price itself -- our baseline to beat.
+  // c. Hybrid = Market × Models. Unlike everything above it is NOT blind: it
+  //    anchors on the market price and nudges it with the model consensus in
+  //    logit space (see lib/aggregators.ts). Its job is to test, out of
+  //    sample, whether the models carry information the market hasn't priced.
+  const hybrid = hybridProb(crowdPrice, validProbs);
+  await insertForecast({
+    roundId,
+    cohortId,
+    marketId: market.id,
+    forecasterId: "hybrid",
+    forecasterKind: "ensemble",
+    probYes: hybrid,
+    reasoning:
+      hybrid != null
+        ? `Logit blend: ${HYBRID_CROWD_WEIGHT} x market price + ${(1 - HYBRID_CROWD_WEIGHT).toFixed(1)} x consensus of ${validProbs.length}/${models.length} valid model forecasts.`
+        : null,
+    keyFactors: null,
+    crowdPrice,
+    promptText: null,
+    rawResponse: null,
+    ok: hybrid != null ? 1 : 0,
+    error:
+      hybrid != null
+        ? null
+        : crowdPrice == null
+          ? "no market price"
+          : "no valid member forecasts",
+    apiCost: 0,
+    apiLatencyMs: 0,
+  });
+  if (hybrid != null) okCount += 1;
+  else failCount += 1;
+  forecastCount += 1;
+
+  // d. Crowd = the Polymarket price itself -- our baseline to beat.
   const crowdOk = crowdPrice != null;
   await insertForecast({
     roundId,
@@ -304,9 +340,9 @@ export async function runRound(cohortId: string): Promise<RoundResult> {
     },
   );
 
-  // The 6 live LLM forecasters (ensemble + crowd are computed, not called).
+  // The 6 live LLM forecasters (ensemble, hybrid and crowd are computed, not called).
   const models = await queryAll<ModelRow>(
-    "SELECT * FROM models WHERE id NOT IN ('ensemble', 'crowd') ORDER BY id",
+    "SELECT * FROM models WHERE id NOT IN ('ensemble', 'hybrid', 'crowd') ORDER BY id",
   );
 
   // Soft budget guard: stop launching new markets once cumulative spend would
