@@ -13,11 +13,15 @@ import {
   BookOpen,
   TrendingUp,
   Info,
+  GraduationCap,
+  Database,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Leaderboard", icon: Trophy },
+  { href: "/learn", label: "Tutorial", icon: GraduationCap },
+  { href: "/data", label: "The Data", icon: Database },
   { href: "/insights", label: "Findings", icon: FlaskConical },
   { href: "/analysis", label: "The Lesson", icon: Lightbulb },
   { href: "/arena", label: "Arena", icon: Swords },
