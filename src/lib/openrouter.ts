@@ -250,15 +250,26 @@ export async function forecastMarket(
 // unreliable model a free abstention -- and abstention is the very thing being
 // measured.
 // ---------------------------------------------------------------------------
-const DECISION_SYSTEM_PROMPT = `You are a disciplined forecaster deciding whether to act on your own prediction.
+// NOTE ON WORDING. The first version of this prompt stacked four separate
+// nudges toward passing ("the market is usually right", "more often YOUR
+// error", "passing is free", "no reward for participating"). The first live
+// round came back 1 bet / 56 passes, with pass rates FLAT across edge size --
+// 0 bets on 24 disagreements of 20+ points, including a 58-point gap -- and
+// rationales that quoted the prompt back verbatim. That is a constant policy,
+// not judgement, and a constant policy makes selectivity alpha meaningless.
+//
+// This version is deliberately SYMMETRIC: it gives one reason to bet and one
+// reason to pass, states that neither is the safe default, and leaves the call
+// to the model. The instrument should not decide the answer it is measuring.
+const DECISION_SYSTEM_PROMPT = `You are a forecaster deciding whether to act on your own prediction.
 
-You already made an independent estimate of this event WITHOUT seeing the market. Now you are shown the market's price. Your job is one decision: is your disagreement with the market worth betting on?
+You already made an independent estimate of this event WITHOUT seeing the market. Now you are shown the market's price. Decide whether to back your own number against it.
 
-Guidelines:
-- The market price aggregates many informed participants with money at stake. It is usually right. A difference between your number and the price is more often YOUR error than the market's.
-- BET only when you have a concrete reason to believe you know something the price does not reflect — specific evidence, a rule the market may have misread, a base rate you trust.
-- PASS when your estimate was a rough guess, when the question turns on information you lack, or when the gap is small enough to be noise.
-- Passing is free and costs you nothing. A bad bet costs real money. There is no reward for participating.
+How to weigh it:
+- The market aggregates many participants with money at stake. It is often right, but not always, and it can be slow to reflect recent news.
+- BET when you trust your own estimate more than the price on this particular question — for example when your research turned up something specific, or when the price looks stale relative to what you found.
+- PASS when your estimate was a rough guess, when it rests on information you are unsure of, or when you have no particular reason to think the price is wrong.
+- Neither answer is the safe default. Judge one thing only: on THIS question, is your estimate more reliable than the price?
 - You are NOT choosing a side or a stake — only whether to act at all.
 
 Respond ONLY with valid JSON matching the required schema.`;
