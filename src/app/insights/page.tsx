@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   BiasChart,
@@ -131,15 +132,33 @@ export default async function InsightsPage() {
       <section className="space-y-3">
         <div>
           <h2 className="text-lg font-semibold">
-            3. Models can&apos;t beat the market — but they can improve it
+            {edge > 0
+              ? "3. Models can't beat the market — but they can improve it"
+              : "3. Models can't beat the market, and the blend no longer improves it"}
           </h2>
           <p className="max-w-3xl text-sm text-muted-foreground">
             Head-to-head, the market price wins: when the model consensus diverges from the
             price, the market is right about 70% of the time. But &quot;usually wrong&quot;
             still carries signal. Blending roughly 20% of the model consensus into the
-            market price (in log-odds space) produced a better Brier score than the market
-            alone — the <span className="text-rose-400">Market × Models</span> forecaster
-            on the leaderboard runs exactly this rule, live, as an out-of-sample test.
+            market price (in log-odds space){" "}
+            {edge > 0 ? (
+              <>
+                produces a better Brier score than the market alone — the{" "}
+                <span className="text-rose-400">Market × Models</span> forecaster on the
+                leaderboard runs exactly this rule, live, as an out-of-sample test.
+              </>
+            ) : (
+              <>
+                beat the market on the first few hundred settled forecasts. It no longer does:
+                over the full record the blend now scores{" "}
+                <span className="font-mono">{Math.abs(edge).toFixed(4)}</span> Brier{" "}
+                <em>worse</em> than the price alone. The{" "}
+                <span className="text-rose-400">Market × Models</span> forecaster still runs
+                the rule live, unchanged, because retiring a rule the moment it stops
+                flattering us would be exactly the mistake this page warns about — and its
+                out-of-sample record is reported below either way.
+              </>
+            )}
           </p>
         </div>
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -230,7 +249,7 @@ export default async function InsightsPage() {
             a price. The interesting question was never &quot;can a $0.001 LLM call out-trade
             Polymarket?&quot; (it can&apos;t), but &quot;does it know anything the market
             hasn&apos;t priced?&quot; The data says: a little, reliably enough to measure.
-            The <a href="/" className="text-primary hover:underline">leaderboard</a> now
+            The <Link href="/" className="text-primary hover:underline">leaderboard</Link> now
             tracks that claim in real time, and the{" "}
             <a href="/methodology" className="text-primary hover:underline">methodology</a>{" "}
             page explains every metric.
