@@ -136,8 +136,29 @@ export interface IntervalRow {
   significant: boolean;
 }
 
+export interface LeadLagRow {
+  label: string;
+  sub: string;
+  diff: number; // the OLS slope (named `diff` so it shares the forest plot)
+  lo: number;
+  hi: number;
+  n: number;
+  nMarkets: number;
+  significant: boolean;
+}
+
+export interface LeadLag {
+  /** Share of round-to-round transitions where the stored price did not change. */
+  stalePct: number;
+  nTransitions: number;
+  rows: LeadLagRow[];
+  truth: LeadLagRow | null;
+  bootstrapSamples: number;
+}
+
 export interface DataArticle {
   corpus: CorpusStats;
+  leadLag: LeadLag | null;
   byCategory: CategoryRow[];
   byHorizon: HorizonRow[];
   bySpread: SpreadRow[];
@@ -606,16 +627,218 @@ function getIntervals(cases: MarketCase[], rows: ScoredJoinRow[]): IntervalRow[]
 }
 
 // ---------------------------------------------------------------------------
+// 7. Lead-lag: does the model consensus predict where the price goes next?
+//
+// The naive version of this test produces a positive, significant slope and a
+// very appealing headline. It is an artifact. Our `markets.yes_price` is only
+// refreshed for markets that still pass the top-N volume gate at sync time, so
+// a market can be forecast against a price captured rounds earlier. When that
+// stale snapshot finally updates, it jumps toward reality -- and a model that
+// just ran a live web search "predicts" that jump trivially.
+//
+// So the slope is reported three ways: pooled, and split by whether the price
+// at time t was itself fresh. Only the FRESH row can support a claim that the
+// models lead the actual market.
+// ---------------------------------------------------------------------------
+
+const LEADLAG_SAMPLES = 1000;
+
+interface PathPoint {
+  t: string;
+  price: number;
+  models: number[];
+}
+
+interface Obs {
+  market: string;
+  x: number;
+  y: number;
+}
+
+function olsSlope(obs: Obs[]): number | null {
+  const n = obs.length;
+  if (n < 3) return null;
+  const mx = mean(obs.map((o) => o.x));
+  const my = mean(obs.map((o) => o.y));
+  let sxy = 0;
+  let sxx = 0;
+  for (const o of obs) {
+    sxy += (o.x - mx) * (o.y - my);
+    sxx += (o.x - mx) ** 2;
+  }
+  return sxx === 0 ? null : sxy / sxx;
+}
+
+/**
+ * Block bootstrap resampling whole MARKETS. Observations inside one market
+ * share an outcome and a price path, so resampling individual rows would
+ * understate the interval badly.
+ */
+function slopeCI(obs: Obs[], samples: number): { lo: number; hi: number; nMarkets: number } | null {
+  const byMarket = new Map<string, Obs[]>();
+  for (const o of obs) {
+    const g = byMarket.get(o.market);
+    if (g) g.push(o);
+    else byMarket.set(o.market, [o]);
+  }
+  const blocks = [...byMarket.values()];
+  if (blocks.length < 4) return null;
+  const rng = makeRng(0xc0ffee);
+  const slopes: number[] = [];
+  for (let b = 0; b < samples; b++) {
+    const s: Obs[] = [];
+    for (let i = 0; i < blocks.length; i++) s.push(...blocks[(rng() * blocks.length) | 0]);
+    const sl = olsSlope(s);
+    if (sl != null) slopes.push(sl);
+  }
+  if (slopes.length < 10) return null;
+  slopes.sort((a, b) => a - b);
+  return {
+    lo: slopes[Math.floor(0.025 * slopes.length)],
+    hi: slopes[Math.floor(0.975 * slopes.length)],
+    nMarkets: blocks.length,
+  };
+}
+
+function leadLagRow(label: string, sub: string, obs: Obs[]): LeadLagRow | null {
+  const slope = olsSlope(obs);
+  if (slope == null) return null;
+  const ci = slopeCI(obs, LEADLAG_SAMPLES);
+  return {
+    label,
+    sub,
+    diff: slope,
+    lo: ci?.lo ?? 0,
+    hi: ci?.hi ?? 0,
+    n: obs.length,
+    nMarkets: ci?.nMarkets ?? 0,
+    significant: ci ? ci.lo > 0 || ci.hi < 0 : false,
+  };
+}
+
+async function getLeadLag(): Promise<LeadLag | null> {
+  // Deliberately NOT restricted to settled rows -- the price path exists
+  // whether or not the market has resolved yet.
+  const rows = await queryAll<{
+    market_id: string;
+    round_id: string;
+    forecaster_id: string;
+    prob_yes: number;
+    outcome: number | null;
+    settled: number;
+    created_at: string;
+  }>(
+    `SELECT market_id, round_id, forecaster_id, prob_yes, outcome, settled, created_at
+     FROM forecasts
+     WHERE ok = 1 AND prob_yes IS NOT NULL AND crowd_price IS NOT NULL
+     ORDER BY market_id, created_at`,
+  );
+
+  const byMarket = new Map<string, Map<string, PathPoint>>();
+  const outcomeByMarket = new Map<string, number>();
+  for (const r of rows) {
+    let m = byMarket.get(r.market_id);
+    if (!m) {
+      m = new Map();
+      byMarket.set(r.market_id, m);
+    }
+    let p = m.get(r.round_id);
+    if (!p) {
+      p = { t: r.created_at, price: NaN, models: [] };
+      m.set(r.round_id, p);
+    }
+    if (r.forecaster_id === "crowd") p.price = r.prob_yes;
+    else if (MODEL_ID_SET.has(r.forecaster_id)) p.models.push(r.prob_yes);
+    if (r.settled === 1 && r.outcome != null) outcomeByMarket.set(r.market_id, r.outcome);
+  }
+
+  const stale: Obs[] = [];
+  const fresh: Obs[] = [];
+  const pooled: Obs[] = [];
+  const truth: Obs[] = [];
+  let nTransitions = 0;
+  let nUnchanged = 0;
+
+  for (const [marketId, m] of byMarket) {
+    const seq = [...m.values()]
+      .filter((p) => Number.isFinite(p.price))
+      .sort((a, b) => (a.t < b.t ? -1 : 1));
+
+    for (let i = 0; i < seq.length; i++) {
+      const cur = seq[i];
+      if (cur.models.length < 3) continue;
+      const consensus = mean(cur.models);
+      const x = consensus - cur.price;
+
+      if (i + 1 < seq.length) {
+        if (i > 0) nTransitions += 1;
+        const y = seq[i + 1].price - cur.price;
+        const obs: Obs = { market: marketId, x, y };
+        pooled.push(obs);
+        if (i > 0) {
+          const wasFresh = Math.abs(cur.price - seq[i - 1].price) > 1e-9;
+          if (wasFresh) fresh.push(obs);
+          else {
+            stale.push(obs);
+            nUnchanged += 1;
+          }
+        }
+      }
+
+      const out = outcomeByMarket.get(marketId);
+      if (out != null) truth.push({ market: marketId, x, y: out - cur.price });
+    }
+  }
+
+  if (pooled.length < 20) return null;
+
+  const built = [
+    leadLagRow(
+      "All transitions, pooled",
+      "the naive test — mixes fresh and stale prices",
+      pooled,
+    ),
+    leadLagRow(
+      "Price at t was STALE",
+      "unchanged since the previous round — our cache, not the market",
+      stale,
+    ),
+    leadLagRow(
+      "Price at t was FRESH",
+      "had moved since the previous round — the only honest test",
+      fresh,
+    ),
+  ].filter((r): r is LeadLagRow => r != null);
+
+  return {
+    stalePct: nTransitions ? nUnchanged / nTransitions : 0,
+    nTransitions,
+    rows: built,
+    truth: leadLagRow(
+      "Does disagreement point at the truth?",
+      "y = outcome − price, over resolved markets",
+      truth,
+    ),
+    bootstrapSamples: LEADLAG_SAMPLES,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 export async function getDataArticle(): Promise<DataArticle> {
   const rows = await fetchScoredJoin();
   const cases = buildCases(rows);
-  const [corpus, { ops, failures }] = await Promise.all([getCorpus(cases), getOps()]);
+  const [corpus, { ops, failures }, leadLag] = await Promise.all([
+    getCorpus(cases),
+    getOps(),
+    getLeadLag(),
+  ]);
 
   return {
     corpus,
+    leadLag,
     byCategory: getByCategory(cases),
     byHorizon: getByHorizon(cases),
     bySpread: getBySpread(cases),

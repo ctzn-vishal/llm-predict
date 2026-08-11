@@ -7,7 +7,7 @@ import {
   HorizonChart,
   SpreadChart,
 } from "@/components/data-article-charts";
-import { getDataArticle, type DataArticle, type IntervalRow } from "@/lib/data-article";
+import { getDataArticle, type DataArticle } from "@/lib/data-article";
 
 export const dynamic = "force-dynamic";
 
@@ -85,7 +85,19 @@ const ms = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.rou
 // Forest plot for the bootstrap intervals. Server-rendered SVG -- no
 // interaction needed, and the geometry is the message: does the bar cross zero?
 // ---------------------------------------------------------------------------
-function IntervalPlot({ rows, samples }: { rows: IntervalRow[]; samples: number }) {
+function IntervalPlot({
+  rows,
+  footer,
+  posLabel = "beats the crowd →",
+  negLabel = "← loses to the crowd",
+  unit = "market-rounds",
+}: {
+  rows: { label: string; sub: string; diff: number; lo: number; hi: number; n: number; significant: boolean }[];
+  footer: string;
+  posLabel?: string;
+  negLabel?: string;
+  unit?: string;
+}) {
   const span = Math.max(0.02, ...rows.flatMap((r) => [Math.abs(r.lo), Math.abs(r.hi)])) * 1.15;
   const X0 = 250;
   const X1 = 700;
@@ -102,10 +114,10 @@ function IntervalPlot({ rows, samples }: { rows: IntervalRow[]; samples: number 
         no difference
       </text>
       <text x={x(span * 0.55)} y="18" fill="#10A37F" fontSize="10" textAnchor="middle">
-        beats the crowd →
+        {posLabel}
       </text>
       <text x={x(-span * 0.55)} y="18" fill="#F43F5E" fontSize="10" textAnchor="middle">
-        ← loses to the crowd
+        {negLabel}
       </text>
 
       {rows.map((r, i) => {
@@ -121,7 +133,7 @@ function IntervalPlot({ rows, samples }: { rows: IntervalRow[]; samples: number 
               {r.sub}
             </text>
             <text x="8" y={y + 29} className="fill-muted-foreground" fontSize="9">
-              {r.n} market-rounds · {r.significant ? "excludes zero" : "crosses zero"}
+              {r.n.toLocaleString()} {unit} · {r.significant ? "excludes zero" : "crosses zero"}
             </text>
             {/* interval */}
             <line x1={x(r.lo)} y1={y} x2={x(r.hi)} y2={y} stroke={color} strokeWidth="2.5" />
@@ -136,7 +148,7 @@ function IntervalPlot({ rows, samples }: { rows: IntervalRow[]; samples: number 
         );
       })}
       <text x="8" y={rows.length * rowH + 52} className="fill-muted-foreground" fontSize="9">
-        90% intervals from {samples.toLocaleString()} paired bootstrap resamples over market-rounds. Dot = observed mean advantage in Brier.
+        {footer}
       </text>
     </svg>
   );
@@ -184,6 +196,8 @@ export default async function DataPage() {
   // "Typical bucket" for the category caveat -- the median, not the largest.
   const catSizes = article.byCategory.map((r) => r.n).sort((a, b) => a - b);
   const medianCatN = catSizes.length ? catSizes[Math.floor(catSizes.length / 2)] : 0;
+
+  const ll = article.leadLag;
 
   return (
     <div className="space-y-10 pb-12">
@@ -506,7 +520,10 @@ export default async function DataPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <IntervalPlot rows={article.intervals} samples={article.bootstrapSamples} />
+            <IntervalPlot
+              rows={article.intervals}
+              footer={`90% intervals from ${article.bootstrapSamples.toLocaleString()} paired bootstrap resamples over market-rounds. Dot = observed mean advantage in Brier.`}
+            />
           </CardContent>
         </Card>
         <Prose>
@@ -590,6 +607,128 @@ export default async function DataPage() {
           </p>
         </Prose>
       </Section>
+
+      {ll && ll.rows.length >= 3 && (
+        <>
+          <Separator />
+          <Section n={7} title="A result we had to throw away">
+            <Prose>
+              <p>
+                Brier scores only grade a forecaster once the market resolves, which is slow and
+                wastes most of the data. There is a sharper test borrowed from finance: instead of
+                asking whether the model is <em>accurate</em>, ask whether it is <em>early</em>. If
+                a model disagrees with the price today, does the price move toward the model
+                tomorrow? A forecaster with genuine information should lead the market it is
+                trading against, and this test yields an observation every round instead of one per
+                resolution.
+              </p>
+              <p>
+                Run naively, it works. Pooled across all {ll.nTransitions.toLocaleString()}{" "}
+                round-to-round transitions, the model consensus predicts the direction of the next
+                price move with a slope of{" "}
+                <span className="font-mono">{ll.rows[0].diff.toFixed(4)}</span>, and the interval
+                clears zero. That is a headline: <em>cheap LLMs anticipate prediction-market
+                moves.</em>
+              </p>
+              <p>
+                It is not true. It is a bug in this codebase, measured.
+              </p>
+            </Prose>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm font-medium">
+                  The same test, split by whether our stored price was stale
+                </CardTitle>
+                <CardDescription>
+                  OLS slope of (next price move) on (model consensus − price), with 95% intervals
+                  from a block bootstrap that resamples whole markets.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <IntervalPlot
+                  rows={ll.rows}
+                  posLabel="model leads →"
+                  negLabel="← model lags"
+                  unit="transitions"
+                  footer={`Block bootstrap, ${ll.bootstrapSamples.toLocaleString()} resamples over markets. Dot = OLS slope.`}
+                />
+              </CardContent>
+            </Card>
+
+            <Prose>
+              <p>
+                The arena refreshes market prices by re-syncing Polymarket&apos;s top markets by
+                volume before each round. A market that is still being forecast but has dropped out
+                of that top slice keeps whatever price it was last given — so{" "}
+                <strong className="text-foreground">
+                  {Math.round(ll.stalePct * 100)}% of round-to-round transitions show no price
+                  change at all
+                </strong>
+                , not because the market was quiet but because nobody asked it.
+              </p>
+              <p>
+                When that stale snapshot eventually refreshes, it jumps to catch up with reality. A
+                model that just ran a live web search &quot;predicts&quot; that jump for free — it
+                is not forecasting the market, it is forecasting our own cache. Splitting the sample
+                on that single distinction separates the two stories cleanly:{" "}
+                <span className="font-mono">{ll.rows[1].diff.toFixed(4)}</span> when the price was
+                stale ({ll.rows[1].significant ? "interval clears zero" : "not significant"}), and{" "}
+                <span className="font-mono">{ll.rows[2].diff.toFixed(4)}</span> when it was fresh (
+                {ll.rows[2].significant ? "interval clears zero" : "indistinguishable from zero"}).
+                {!ll.rows[2].significant &&
+                  " All of the apparent edge lives in the stale rows. Against a market price we actually observed moving, the models lead by nothing."}
+              </p>
+              {ll.truth && (
+                <>
+                <p>
+                  The same conclusion arrives from a direction that does not depend on price
+                  refresh at all. Regressing the eventual outcome on the model&apos;s disagreement
+                  with the price gives a slope of{" "}
+                  <span className="font-mono">{ll.truth.diff.toFixed(4)}</span> (95% CI{" "}
+                  <span className="font-mono">
+                    [{ll.truth.lo.toFixed(3)}, {ll.truth.hi.toFixed(3)}]
+                  </span>
+                  , {ll.truth.nMarkets} markets). If disagreement carried information about the
+                  truth, that slope would be positive, and it would tell you how far to move from
+                  the price toward the models — in other words, the optimal blend weight.{" "}
+                  {ll.truth.significant
+                    ? `It is reliably ${ll.truth.diff < 0 ? "negative" : "positive"}.`
+                    : `The point estimate is ${ll.truth.diff < 0 ? "negative" : "positive"}, but the interval straddles zero, so the honest reading is "no detectable information" rather than "negative information."`}{" "}
+                  Either way it gives no support to a positive weight on the models, which is the
+                  same verdict the confidence intervals above deliver — reached without using a
+                  single Brier score.
+                </p>
+                <p className="text-xs">
+                  Note the sample here: {ll.truth.n.toLocaleString()} observations, but only{" "}
+                  {ll.truth.nMarkets} markets, and observations inside one market share an outcome.
+                  The bootstrap resamples whole markets for exactly that reason, which is why the
+                  interval is as wide as it is. The effective sample size is the market count, not
+                  the row count.
+                </p>
+                </>
+              )}
+              <p>
+                <span className="text-foreground">Why this section exists.</span> The result is
+                null, so it wins no argument and appears on no leaderboard. But the near-miss is the
+                most useful thing in this article: a plausible test, a clean significant result, a
+                satisfying story — and an artifact of our own infrastructure. The only reason it was
+                caught is that the confound suggested an obvious falsification test, and the test
+                was run before the headline was written.
+              </p>
+              <p>
+                <span className="text-foreground">It also flags a live defect.</span> If{" "}
+                {Math.round(ll.stalePct * 100)}% of forecasts are scored against a price that is at
+                least a round old, then &quot;the crowd&quot; on the leaderboard is not quite the
+                market&apos;s current opinion — it is a slightly delayed one, and a delayed price is
+                a weaker forecaster than a live one. That handicaps the baseline the models are
+                already losing to, which means the models&apos; deficit is, if anything,
+                understated.
+              </p>
+            </Prose>
+          </Section>
+        </>
+      )}
 
       <Card className="border-dashed">
         <CardContent className="space-y-2 p-5 text-sm text-muted-foreground">

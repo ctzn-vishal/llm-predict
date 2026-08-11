@@ -524,11 +524,30 @@ export default function LearnPage() {
           </li>
         </ul>
         <p>
-          The project already has one worked example of applying this discipline to itself: a learned
-          bias correction that looked excellent in-sample made forecasts{" "}
-          <em>worse</em> when fit on the earlier half of the data and tested on the later half. It
-          was dropped, and the reason it was dropped is written up on the Findings page. That is the
-          template — a result that fails the honest test is still a result.
+          There is a sixth item that deserves its own line, because it is the one that catches
+          people who have already learned the other five:{" "}
+          <strong className="text-foreground">
+            a significant result can be an artifact of your own plumbing
+          </strong>
+          . The arena ran a standard test for whether the models lead the market — do prices move
+          toward a model that disagrees with them? — and got a clean, significant yes. It was
+          false. The market prices in our database are only refreshed for markets that still rank
+          highly by volume, so most forecasts are made against a slightly stale snapshot, and a
+          model with live web search &quot;predicts&quot; the moment that snapshot catches up. Split
+          the sample by whether the price was actually fresh and the entire effect evaporates. The
+          write-up is on the{" "}
+          <Link href="/data" className="text-primary hover:underline">
+            Data
+          </Link>{" "}
+          page. No amount of statistical care would have caught that — only knowing how the data was
+          produced.
+        </p>
+        <p>
+          The project has a second worked example of the same discipline: a learned bias correction
+          that looked excellent in-sample made forecasts <em>worse</em> when fit on the earlier half
+          of the data and tested on the later half. It was dropped, and the reason it was dropped is
+          written up on the Findings page. That is the template — a result that fails the honest
+          test is still a result.
         </p>
       </Section>
 
