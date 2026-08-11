@@ -28,6 +28,35 @@ export const FORECAST_JSON_SCHEMA = {
 };
 
 // ===========================================================================
+// Stage-2 decision response. AFTER making a blind forecast, the model is shown
+// the market price and its own earlier reasoning, and asked one question: is
+// this edge worth acting on? It does NOT choose a side (that follows
+// mechanically from whether its probability sits above or below the price) and
+// it does NOT choose a stake (Kelly does that from its own number). Isolating
+// the single bet/pass bit is what makes the result readable at this sample
+// size -- see lib/betting.ts for why the null arm is "always bet".
+// ===========================================================================
+export const DecisionSchema = z.object({
+  action: z.enum(["bet", "pass"]),
+  rationale: z.string(),
+});
+export type Decision = z.infer<typeof DecisionSchema>;
+
+export const DECISION_JSON_SCHEMA = {
+  name: "decision",
+  strict: true,
+  schema: {
+    type: "object" as const,
+    properties: {
+      action: { type: "string" as const, enum: ["bet", "pass"] },
+      rationale: { type: "string" as const },
+    },
+    required: ["action", "rationale"],
+    additionalProperties: false,
+  },
+};
+
+// ===========================================================================
 // DB row types
 // ===========================================================================
 export interface ModelRow {
@@ -96,6 +125,45 @@ export interface ForecastRow {
   outcome: number | null; // 1=yes, 0=no
   brier: number | null;
   log_loss: number | null;
+  created_at: string;
+}
+
+export type DecisionAction = "bet" | "pass";
+export type BetSide = "yes" | "no";
+
+/**
+ * One stage-2 decision: (round, market, forecaster).
+ *
+ * Both arms of the paired comparison live in this single row -- `pnl_flat` is
+ * what the model's own choice earned, `null_pnl_flat` is what betting every
+ * edge would have earned on the same market. Keeping them together makes the
+ * paired exclusion structural: a row with ok=0 contributes to NEITHER arm, so
+ * an unreliable model cannot collect the variance-reduction benefit of
+ * abstaining without having actually decided to abstain.
+ */
+export interface DecisionRow {
+  id: number;
+  round_id: string;
+  cohort_id: string;
+  market_id: string;
+  forecaster_id: string;
+  prob_yes: number; // the model's own stage-1 blind forecast
+  price: number; // market price revealed at decision time
+  edge: number; // prob_yes - price
+  side: BetSide; // implied by the sign of `edge`, not chosen by the model
+  action: DecisionAction | null; // null when ok=0
+  kelly_fraction: number; // Kelly stake as a fraction of bankroll
+  rationale: string | null;
+  prompt_text: string | null;
+  raw_response: string | null;
+  ok: number;
+  error: string | null;
+  api_cost: number;
+  api_latency_ms: number;
+  settled: number;
+  outcome: number | null;
+  pnl_flat: number | null; // profit per 1 unit staked; 0 when the model passed
+  null_pnl_flat: number | null; // profit per 1 unit if it had always bet
   created_at: string;
 }
 

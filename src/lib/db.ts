@@ -130,6 +130,43 @@ const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_forecasts_cohort ON forecasts(cohort_id)`,
   `CREATE INDEX IF NOT EXISTS idx_forecasts_settled ON forecasts(settled)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_forecasts_unique ON forecasts(round_id, market_id, forecaster_id)`,
+  // -------------------------------------------------------------------------
+  // decisions: STAGE 2. After the blind forecast, the model is shown the price
+  // and asked whether the edge is worth acting on. Both arms of the paired
+  // comparison live in one row (pnl_flat = what it chose, null_pnl_flat = what
+  // betting every edge would have earned), so a failed call (ok=0) drops out of
+  // BOTH arms automatically and flakiness cannot masquerade as selectivity.
+  // -------------------------------------------------------------------------
+  `CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id TEXT NOT NULL,
+    cohort_id TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    forecaster_id TEXT NOT NULL,
+    prob_yes REAL NOT NULL,                          -- stage-1 blind forecast
+    price REAL NOT NULL,                             -- price revealed at decision time
+    edge REAL NOT NULL,                              -- prob_yes - price
+    side TEXT NOT NULL,                              -- 'yes' | 'no', implied by edge sign
+    action TEXT,                                     -- 'bet' | 'pass' (NULL when ok=0)
+    kelly_fraction REAL NOT NULL DEFAULT 0,
+    rationale TEXT,
+    prompt_text TEXT,
+    raw_response TEXT,
+    ok INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    api_cost REAL DEFAULT 0,
+    api_latency_ms INTEGER DEFAULT 0,
+    settled INTEGER NOT NULL DEFAULT 0,
+    outcome INTEGER,
+    pnl_flat REAL,                                   -- per 1 unit staked; 0 if passed
+    null_pnl_flat REAL,                              -- per 1 unit if it had always bet
+    created_at TEXT DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_decisions_round ON decisions(round_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_decisions_market ON decisions(market_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_decisions_forecaster ON decisions(forecaster_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_decisions_settled ON decisions(settled)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_unique ON decisions(round_id, market_id, forecaster_id)`,
 ];
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,9 @@
 import {
   ForecastSchema,
   FORECAST_JSON_SCHEMA,
+  DecisionSchema,
+  DECISION_JSON_SCHEMA,
+  type BetSide,
   type MarketRow,
 } from "@/lib/schemas";
 
@@ -237,4 +240,195 @@ export async function forecastMarket(
   return { ...base, error: lastError };
 }
 
-export { SYSTEM_PROMPT };
+// ---------------------------------------------------------------------------
+// STAGE 2 -- the bet/pass decision.
+//
+// Unlike the blind forecast this call DOES see the price, and it runs no web
+// search: the research already happened in stage 1, so this is a short, cheap,
+// fast call (~10x cheaper, since search is the dominant cost). That budget is
+// spent on retries instead, because a stage-2 failure would otherwise hand an
+// unreliable model a free abstention -- and abstention is the very thing being
+// measured.
+// ---------------------------------------------------------------------------
+const DECISION_SYSTEM_PROMPT = `You are a disciplined forecaster deciding whether to act on your own prediction.
+
+You already made an independent estimate of this event WITHOUT seeing the market. Now you are shown the market's price. Your job is one decision: is your disagreement with the market worth betting on?
+
+Guidelines:
+- The market price aggregates many informed participants with money at stake. It is usually right. A difference between your number and the price is more often YOUR error than the market's.
+- BET only when you have a concrete reason to believe you know something the price does not reflect — specific evidence, a rule the market may have misread, a base rate you trust.
+- PASS when your estimate was a rough guess, when the question turns on information you lack, or when the gap is small enough to be noise.
+- Passing is free and costs you nothing. A bad bet costs real money. There is no reward for participating.
+- You are NOT choosing a side or a stake — only whether to act at all.
+
+Respond ONLY with valid JSON matching the required schema.`;
+
+export interface DecisionResult {
+  ok: boolean;
+  action: "bet" | "pass" | null;
+  rationale: string | null;
+  raw: string;
+  cost: number;
+  latencyMs: number;
+  error: string | null;
+  promptText: string;
+}
+
+export function buildDecisionPrompt(
+  market: MarketRow,
+  probYes: number,
+  price: number,
+  side: BetSide,
+  ownReasoning: string | null,
+): string {
+  const edge = Math.abs(probYes - price) * 100;
+  return `# Question
+${market.question}
+
+## Your blind estimate (made without seeing the market)
+P(YES) = ${(probYes * 100).toFixed(0)}%
+${ownReasoning ? `Your reasoning at the time: ${ownReasoning}` : ""}
+
+## The market
+The market currently prices YES at ${(price * 100).toFixed(0)}%.
+
+You are ${edge.toFixed(0)} percentage points ${probYes >= price ? "ABOVE" : "BELOW"} the market. Acting on this would mean backing ${side.toUpperCase()}.
+
+## Your decision
+Is this disagreement worth betting on, or is the market more likely to be right than you? Answer "bet" or "pass" with one sentence of rationale.`;
+}
+
+/**
+ * Ask one model whether to act on its own forecast. Never throws; failures come
+ * back as { ok: false, error } so the pipeline records them with ok=0 and drops
+ * the market from BOTH arms of that model's paired comparison.
+ */
+export async function decideBet(
+  openrouterId: string,
+  market: MarketRow,
+  probYes: number,
+  price: number,
+  side: BetSide,
+  ownReasoning: string | null,
+): Promise<DecisionResult> {
+  const promptText = buildDecisionPrompt(market, probYes, price, side, ownReasoning);
+  const base: DecisionResult = {
+    ok: false,
+    action: null,
+    rationale: null,
+    raw: "",
+    cost: 0,
+    latencyMs: 0,
+    error: null,
+    promptText,
+  };
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return { ...base, error: "OPENROUTER_API_KEY not set" };
+
+  const body = {
+    model: openrouterId,
+    // No web search: stage 1 already did the research, and this call is a
+    // judgement about that research rather than a fresh look at the world.
+    temperature: 0,
+    max_tokens: 400,
+    usage: { include: true },
+    messages: [
+      { role: "system", content: DECISION_SYSTEM_PROMPT },
+      { role: "user", content: promptText },
+    ],
+    response_format: { type: "json_schema", json_schema: DECISION_JSON_SCHEMA },
+  };
+
+  let lastError = "unknown error";
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const startMs = Date.now();
+    const controller = new AbortController();
+    // Half the stage-1 budget: no search, few tokens, so a slow response here
+    // is a stuck provider rather than deep work.
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const reqBody =
+        attempt === 0
+          ? body
+          : { ...body, response_format: { type: "json_object" as const } };
+
+      const res = await fetch(OPENROUTER_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://llm-prediction-arena.vercel.app",
+          "X-Title": "Wisdom of Artificial Crowds",
+        },
+        body: JSON.stringify(reqBody),
+        signal: controller.signal,
+      });
+      const latencyMs = Date.now() - startMs;
+
+      if (res.status === 429 || res.status >= 500) {
+        lastError = `HTTP ${res.status}`;
+        if (attempt < MAX_RETRIES) {
+          await sleep(RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+        return { ...base, latencyMs, error: `${lastError} after ${MAX_RETRIES} retries` };
+      }
+      if (!res.ok) {
+        const txt = await res.text();
+        return { ...base, latencyMs, error: `HTTP ${res.status}: ${txt.slice(0, 200)}` };
+      }
+
+      const data = await res.json();
+      const raw: string = data.choices?.[0]?.message?.content ?? "";
+      const usage = data.usage ?? {};
+      const cost: number =
+        usage.cost ??
+        usage.total_cost ??
+        (usage.prompt_tokens ?? 0) * 1e-6 + (usage.completion_tokens ?? 0) * 2e-6;
+
+      const parsed = extractForecast(raw); // same lenient JSON extraction
+      const validated = parsed ? DecisionSchema.safeParse(parsed) : null;
+      if (!validated || !validated.success) {
+        lastError = raw ? "unparseable decision JSON" : "empty response";
+        if (attempt < MAX_RETRIES) {
+          await sleep(RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+        return { ...base, raw, cost, latencyMs, error: lastError };
+      }
+
+      return {
+        ok: true,
+        action: validated.data.action,
+        rationale: validated.data.rationale,
+        raw,
+        cost,
+        latencyMs,
+        error: null,
+        promptText,
+      };
+    } catch (err) {
+      const timedOut = controller.signal.aborted;
+      lastError = timedOut
+        ? "timeout after 15000ms"
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      // Unlike stage 1 we DO retry a timeout here: the call is cheap and short,
+      // and a lost decision costs a paired observation.
+      if (attempt < MAX_RETRIES) {
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      return { ...base, latencyMs: Date.now() - startMs, error: lastError };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return { ...base, error: lastError };
+}
+
+export { SYSTEM_PROMPT, DECISION_SYSTEM_PROMPT };

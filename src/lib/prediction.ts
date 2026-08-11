@@ -1,8 +1,9 @@
 import { nanoid } from "nanoid";
 import { queryAll, queryOne, run } from "./db";
 import type { CohortRow, ForecasterKind, MarketRow, ModelRow } from "./schemas";
-import { forecastMarket } from "./openrouter";
+import { decideBet, forecastMarket } from "./openrouter";
 import { HYBRID_CROWD_WEIGHT, hybridProb } from "./aggregators";
+import { impliedSide, kellyFraction, MIN_EDGE } from "./betting";
 
 export interface RoundResult {
   roundId: string;
@@ -273,6 +274,61 @@ async function processMarket(
   if (hybrid != null) okCount += 1;
   else failCount += 1;
   forecastCount += 1;
+
+  // c2. STAGE 2 -- reveal the price to each model that produced a valid blind
+  //     forecast, and ask whether its own disagreement is worth acting on.
+  //     Runs in parallel across models; skipped entirely when there is no
+  //     tradeable edge, so we never spend a call on a decision with no content.
+  if (crowdPrice != null && crowdPrice > 0 && crowdPrice < 1) {
+    await Promise.all(
+      models.map(async (model, i) => {
+        const f = results[i];
+        if (!f.ok || f.prob == null) return; // no forecast, nothing to decide
+        const edge = f.prob - crowdPrice;
+        if (Math.abs(edge) < MIN_EDGE) return;
+
+        const side = impliedSide(f.prob, crowdPrice);
+        const d = await decideBet(
+          model.openrouter_id,
+          market,
+          f.prob,
+          crowdPrice,
+          side,
+          f.reasoning,
+        );
+        cost += d.cost;
+        await run(
+          `INSERT OR REPLACE INTO decisions
+             (round_id, cohort_id, market_id, forecaster_id, prob_yes, price, edge,
+              side, action, kelly_fraction, rationale, prompt_text, raw_response,
+              ok, error, api_cost, api_latency_ms, settled, outcome, pnl_flat, null_pnl_flat)
+           VALUES
+             (@round_id, @cohort_id, @market_id, @forecaster_id, @prob_yes, @price, @edge,
+              @side, @action, @kelly_fraction, @rationale, @prompt_text, @raw_response,
+              @ok, @error, @api_cost, @api_latency_ms, 0, NULL, NULL, NULL)`,
+          {
+            round_id: roundId,
+            cohort_id: cohortId,
+            market_id: market.id,
+            forecaster_id: model.id,
+            prob_yes: f.prob,
+            price: crowdPrice,
+            edge,
+            side,
+            action: d.ok ? d.action : null,
+            kelly_fraction: kellyFraction(f.prob, crowdPrice),
+            rationale: d.rationale,
+            prompt_text: d.promptText,
+            raw_response: d.raw || null,
+            ok: d.ok ? 1 : 0,
+            error: d.error,
+            api_cost: d.cost,
+            api_latency_ms: d.latencyMs,
+          },
+        );
+      }),
+    );
+  }
 
   // d. Crowd = the Polymarket price itself -- our baseline to beat.
   const crowdOk = crowdPrice != null;

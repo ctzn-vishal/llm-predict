@@ -15,13 +15,16 @@ export interface ForecasterMeta {
 // The 6 live models, in a stable display order, plus the two synthetic
 // forecasters. `crowd` is the baseline (the Polymarket price); `ensemble` is
 // the mean of the 6 model probabilities.
+// List prices verified against the OpenRouter catalog on 2026-08-10. These are
+// for DISPLAY only -- every stored cost comes from the `usage.cost` field the
+// API returns per call, so a drift here never affects any spend figure.
 export const FORECASTERS: ForecasterMeta[] = [
-  { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", provider: "DeepSeek", emoji: "🔮", color: "#FF6B35", kind: "model", region: "CN", costIn: 0.10, costOut: 0.20 },
-  { id: "qwen3-235b", name: "Qwen3 235B", provider: "Alibaba", emoji: "🐲", color: "#06B6D4", kind: "model", region: "CN", costIn: 0.071, costOut: 0.10 },
+  { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", provider: "DeepSeek", emoji: "🔮", color: "#FF6B35", kind: "model", region: "CN", costIn: 0.14, costOut: 0.28 },
+  { id: "qwen3-235b", name: "Qwen3 235B", provider: "Alibaba", emoji: "🐲", color: "#06B6D4", kind: "model", region: "CN", costIn: 0.09, costOut: 0.55 },
   { id: "seed-1.6-flash", name: "Seed 1.6 Flash", provider: "ByteDance", emoji: "🌱", color: "#EC4899", kind: "model", region: "CN", costIn: 0.075, costOut: 0.30 },
   { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "OpenAI", emoji: "🧠", color: "#10A37F", kind: "model", region: "US", costIn: 0.40, costOut: 1.60 },
   { id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite", provider: "Google", emoji: "💎", color: "#4285F4", kind: "model", region: "US", costIn: 0.25, costOut: 1.50 },
-  { id: "mistral-small-3.2", name: "Mistral Small 3.2", provider: "Mistral", emoji: "🌀", color: "#8B5CF6", kind: "model", region: "EU", costIn: 0.075, costOut: 0.20 },
+  { id: "mistral-small-3.2", name: "Mistral Small 3.2", provider: "Mistral", emoji: "🌀", color: "#8B5CF6", kind: "model", region: "EU", costIn: 0.094, costOut: 0.25 },
   { id: "ensemble", name: "Ensemble", provider: "Aggregate", emoji: "🎯", color: "#F59E0B", kind: "ensemble" },
   // Market × Models: NOT blind -- anchors on the market price (w=0.8) and nudges
   // it with the model consensus in logit space. The live test of whether cheap

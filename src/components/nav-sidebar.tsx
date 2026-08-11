@@ -15,11 +15,13 @@ import {
   Info,
   GraduationCap,
   Database,
+  Coins,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Leaderboard", icon: Trophy },
+  { href: "/game", label: "The Game", icon: Coins },
   { href: "/learn", label: "Tutorial", icon: GraduationCap },
   { href: "/data", label: "The Data", icon: Database },
   { href: "/insights", label: "Findings", icon: FlaskConical },

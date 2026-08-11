@@ -1,7 +1,8 @@
 import { queryAll, queryOne, run } from "./db";
-import type { ForecastRow, MarketRow } from "./schemas";
+import type { BetSide, DecisionRow, ForecastRow, MarketRow } from "./schemas";
 import { checkResolution } from "./polymarket";
 import { EPS } from "./scoring";
+import { flatPnl } from "./betting";
 
 export function calculateBrier(prob: number, outcome: 0 | 1): number {
   return (prob - outcome) ** 2;
@@ -18,6 +19,49 @@ export interface SettleResult {
   marketsResolved: number;
   marketsVoided: number;
   forecastsScored: number;
+  decisionsScored: number;
+}
+
+/**
+ * Score every stage-2 decision on a resolved market.
+ *
+ * Both arms are written together: `pnl_flat` is what the model's own choice
+ * earned (0 if it passed) and `null_pnl_flat` is what betting every edge would
+ * have earned on the same market. Failed decisions (ok=0) get a settled flag
+ * and the outcome for context, but NULL in both P&L columns -- so they drop out
+ * of both arms and a flaky model cannot bank a free abstention.
+ */
+async function settleDecisions(marketId: string, y: 0 | 1): Promise<number> {
+  const rows = await queryAll<DecisionRow>(
+    "SELECT * FROM decisions WHERE market_id = @market_id AND settled = 0",
+    { market_id: marketId },
+  );
+  let scored = 0;
+  for (const d of rows) {
+    if (d.ok === 1 && d.action) {
+      const nullPnl = flatPnl(d.side as BetSide, d.price, y);
+      await run(
+        `UPDATE decisions
+         SET settled = 1, outcome = @outcome, pnl_flat = @pnl, null_pnl_flat = @null_pnl
+         WHERE id = @id`,
+        {
+          id: d.id,
+          outcome: y,
+          pnl: d.action === "bet" ? nullPnl : 0,
+          null_pnl: nullPnl,
+        },
+      );
+      scored += 1;
+    } else {
+      await run(
+        `UPDATE decisions
+         SET settled = 1, outcome = @outcome, pnl_flat = NULL, null_pnl_flat = NULL
+         WHERE id = @id`,
+        { id: d.id, outcome: y },
+      );
+    }
+  }
+  return scored;
 }
 
 /**
@@ -36,12 +80,13 @@ export async function settleForecasts(): Promise<SettleResult> {
     "SELECT DISTINCT market_id FROM forecasts WHERE settled = 0",
   );
   if (pending.length === 0) {
-    return { marketsResolved: 0, marketsVoided: 0, forecastsScored: 0 };
+    return { marketsResolved: 0, marketsVoided: 0, forecastsScored: 0, decisionsScored: 0 };
   }
 
   let marketsResolved = 0;
   let marketsVoided = 0;
   let forecastsScored = 0;
+  let decisionsScored = 0;
 
   for (const { market_id } of pending) {
     const market = await queryOne<MarketRow>(
@@ -67,6 +112,13 @@ export async function settleForecasts(): Promise<SettleResult> {
       await run(
         `UPDATE forecasts
          SET settled = 1, outcome = NULL, brier = NULL, log_loss = NULL
+         WHERE market_id = @market_id AND settled = 0`,
+        { market_id },
+      );
+      // A voided market pays nothing either way -- stake returned, no P&L.
+      await run(
+        `UPDATE decisions
+         SET settled = 1, outcome = NULL, pnl_flat = NULL, null_pnl_flat = NULL
          WHERE market_id = @market_id AND settled = 0`,
         { market_id },
       );
@@ -110,6 +162,7 @@ export async function settleForecasts(): Promise<SettleResult> {
         );
       }
     }
+    decisionsScored += await settleDecisions(market_id, y);
     marketsResolved += 1;
   }
 
@@ -122,5 +175,5 @@ export async function settleForecasts(): Promise<SettleResult> {
        )`,
   );
 
-  return { marketsResolved, marketsVoided, forecastsScored };
+  return { marketsResolved, marketsVoided, forecastsScored, decisionsScored };
 }
