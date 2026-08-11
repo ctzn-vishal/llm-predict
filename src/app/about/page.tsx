@@ -65,10 +65,16 @@ export default function AboutPage() {
             </li>
             <li>
               Each model is shown only the market&apos;s question and description and asked for one
-              number: the probability of YES. Crucially it{" "}
-              <strong className="text-foreground">never sees the market price</strong>. A model that
-              could peek at the price could just echo it, and an ensemble of price-echoers would
-              teach us nothing.
+              number: the probability of YES.{" "}
+              <strong className="text-foreground">The prompt never contains the market price</strong>
+              , because a model that could peek at the price could just echo it, and an ensemble of
+              price-echoers would teach us nothing.{" "}
+              <a href="/data" className="text-primary hover:underline">
+                Measured after the fact
+              </a>
+              , though, the blinding is leaky: models research with live web search, prediction-market
+              odds are all over the open web, and most forecasts show signs of having found them.
+              That is a real limitation of this design, not a footnote.
             </li>
             <li>
               The market price is scored as its own forecaster, &ldquo;

@@ -265,6 +265,24 @@ export default function LearnPage() {
             like any other forecaster. This is the bar.
           </li>
         </ul>
+        <Aside title="And in practice, the blinding leaks">
+          <p>
+            The prompt withholds the price. The web search does not. Exa indexes Polymarket and
+            the sites that quote it, so a model can read the number it was never told — and
+            measured against their own stated reasoning, most forecasts show signs of having done
+            exactly that. Within the same market, the forecasts that cite market odds sit
+            measurably closer to the price than the ones that don&apos;t.
+          </p>
+          <p>
+            Keep that in mind for Part 7. The ensemble argument needs errors that are{" "}
+            <em>independent</em>, and forecasts partly anchored to a shared price are correlated
+            by construction. The{" "}
+            <Link href="/data" className="text-primary hover:underline">
+              Data
+            </Link>{" "}
+            page measures the size of the problem and what it does to the results.
+          </p>
+        </Aside>
         <Aside title="Failures are data, not noise to be cleaned">
           <p>
             When a model times out, returns malformed JSON, or errors, the row is written with{" "}

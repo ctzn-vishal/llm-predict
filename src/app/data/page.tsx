@@ -198,6 +198,7 @@ export default async function DataPage() {
   const medianCatN = catSizes.length ? catSizes[Math.floor(catSizes.length / 2)] : 0;
 
   const ll = article.leadLag;
+  const lk = article.leakage;
 
   return (
     <div className="space-y-10 pb-12">
@@ -724,6 +725,209 @@ export default async function DataPage() {
                 a weaker forecaster than a live one. That handicaps the baseline the models are
                 already losing to, which means the models&apos; deficit is, if anything,
                 understated.
+              </p>
+            </Prose>
+          </Section>
+        </>
+      )}
+
+      {lk && (
+        <>
+          <Separator />
+          <Section n={8} title="The blind forecasts are not entirely blind">
+            <Prose>
+              <p>
+                Every claim on this site rests on one assumption: the six models never see the
+                market price, so their forecasts are independent of it. The prompt does withhold
+                the price. But the models also run a live web search, and Exa indexes Polymarket,
+                Kalshi, and every site that quotes them. A model can simply read the number it was
+                never told.
+              </p>
+              <p>
+                It happens constantly.{" "}
+                <strong className="text-foreground">
+                  {Math.round(lk.leakPct * 100)}% of valid blind forecasts
+                </strong>{" "}
+                ({lk.nLeaked.toLocaleString()} of {lk.nForecasts.toLocaleString()}) name a
+                prediction venue or cite market-implied odds in their own stated reasoning. The
+                detector is deliberately narrow — it matches &quot;Polymarket&quot;,
+                &quot;implied probability&quot;, &quot;betting odds&quot; and similar, but not
+                &quot;stock market&quot; or &quot;market cap&quot; — so this is a floor, not an
+                estimate.
+              </p>
+            </Prose>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm font-medium">How often each model does it</CardTitle>
+                  <CardDescription>
+                    Share of that model&apos;s valid blind forecasts citing market odds.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <table className="w-full text-left text-sm">
+                    <tbody>
+                      {lk.perModel.map((m) => (
+                        <tr key={m.id} className="border-b border-border/50 last:border-0">
+                          <td className="py-2">
+                            <span className="mr-2">{m.emoji}</span>
+                            {m.name}
+                          </td>
+                          <td className="py-2 text-right font-mono text-xs text-muted-foreground">
+                            {m.leak.toLocaleString()}/{m.n.toLocaleString()}
+                          </td>
+                          <td className="w-28 py-2 pl-3">
+                            <div className="h-2 w-full rounded bg-muted">
+                              <div
+                                className="h-2 rounded"
+                                style={{ width: `${m.pct * 100}%`, background: m.color }}
+                              />
+                            </div>
+                          </td>
+                          <td className="py-2 pl-2 text-right font-mono text-xs">
+                            {(m.pct * 100).toFixed(0)}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm font-medium">
+                    Does it pull the forecast toward the price?
+                  </CardTitle>
+                  <CardDescription>
+                    Within-market test: same market, same round, same price — leaky forecasts
+                    versus clean ones.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm text-muted-foreground">
+                  <p className="font-mono text-foreground">
+                    {lk.withinDiff >= 0 ? "+" : ""}
+                    {(lk.withinDiff * 100).toFixed(2)} pts
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      95% CI [{(lk.withinLo * 100).toFixed(2)}, {(lk.withinHi * 100).toFixed(2)}]
+                    </span>
+                  </p>
+                  <p className="text-xs">
+                    Across {lk.withinGroups.toLocaleString()} market-rounds ({lk.withinMarkets}{" "}
+                    markets) that contained both a leaky and a clean forecast.{" "}
+                    {lk.withinSignificant && lk.withinDiff < 0
+                      ? "Negative and clear of zero: citing the market moves a forecast measurably closer to the price, holding the question fixed."
+                      : lk.withinSignificant
+                        ? "Clear of zero, in the opposite direction to the leakage hypothesis."
+                        : "Not distinguishable from zero at this sample size."}
+                  </p>
+                  <div className="border-t border-border pt-3">
+                    <p className="text-xs">
+                      Forecasts landing within half a point of the price:{" "}
+                      <span className="font-mono text-foreground">
+                        {(lk.copyPct * 100).toFixed(1)}%
+                      </span>{" "}
+                      versus{" "}
+                      <span className="font-mono">{(lk.copyBaselinePct * 100).toFixed(1)}%</span>{" "}
+                      expected by chance (prices shuffled across unrelated markets) — a{" "}
+                      {(lk.copyPct / Math.max(lk.copyBaselinePct, 1e-9)).toFixed(1)}× enrichment.
+                      Some of these are verbatim: the reasoning quotes an implied probability and
+                      the forecast is that number.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {lk.strata.length >= 2 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm font-medium">
+                    Leakage was flattering the models, not fooling us
+                  </CardTitle>
+                  <CardDescription>
+                    The same ensemble-vs-crowd comparison, split by how much of the round&apos;s
+                    forecasting cited a market.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-xs text-muted-foreground">
+                          <th className="pb-2 font-medium">Market-rounds where…</th>
+                          <th className="pb-2 text-right font-medium">n</th>
+                          <th className="pb-2 text-right font-medium">Ensemble</th>
+                          <th className="pb-2 text-right font-medium">Crowd</th>
+                          <th className="pb-2 text-right font-medium">Skill</th>
+                        </tr>
+                      </thead>
+                      <tbody className="font-mono text-xs">
+                        {lk.strata.map((s) => (
+                          <tr key={s.label} className="border-b border-border/50 last:border-0">
+                            <td className="py-2 font-sans">{s.label}</td>
+                            <td className="py-2 text-right">{s.n}</td>
+                            <td className="py-2 text-right">{s.ensemble.toFixed(4)}</td>
+                            <td className="py-2 text-right">{s.crowd.toFixed(4)}</td>
+                            <td
+                              className={`py-2 text-right ${
+                                s.skill >= 0 ? "text-emerald-400" : "text-red-400"
+                              }`}
+                            >
+                              {s.skill >= 0 ? "+" : ""}
+                              {s.skill.toFixed(4)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            <Prose>
+              <p>
+                That table is the part worth sitting with. The intuitive worry is that leakage
+                inflates the models — that they look competitive only because they are copying. The
+                data says the effect is real and{" "}
+                <strong className="text-foreground">larger than the headline suggests</strong>: on
+                rounds where no model cited a market, the ensemble loses to the crowd by{" "}
+                <span className="font-mono">{lk.strata[0]?.skill.toFixed(4)}</span>, against{" "}
+                <span className="font-mono">
+                  {lk.strata[lk.strata.length - 1]?.skill.toFixed(4)}
+                </span>{" "}
+                where every model cited one. The pooled number reported everywhere else on this
+                site sits between those, because most rounds are mixed.
+              </p>
+              <p>
+                One honest confound: the no-leakage rounds are harder for everyone — the crowd&apos;s
+                own Brier is worse there too, because a market nobody writes about is a market
+                nobody has analysed. But the models degrade far more steeply than the crowd does
+                across those strata, which is what you would expect if part of their apparent
+                accuracy had been borrowed rather than earned.
+              </p>
+              <p>
+                <span className="text-foreground">What this does and does not overturn.</span> It
+                does not rescue the models — the direction of every finding on this site survives,
+                and the honest version of &quot;cheap LLMs lose to the market&quot; is worse than
+                the number we have been reporting. What it does undermine is the word{" "}
+                <em>independent</em>. The ensemble argument on{" "}
+                <Link href="/analysis" className="text-primary hover:underline">
+                  The Lesson
+                </Link>{" "}
+                assumes six forecasts that err in unrelated ways; forecasts partly anchored to a
+                shared price are correlated by construction, and averaging cannot diversify away an
+                error they all inherited from the same source.
+              </p>
+              <p>
+                <span className="text-foreground">The fix is not obvious.</span> Removing web search
+                would make the models genuinely blind and much worse, and would stop testing
+                anything interesting. Excluding prediction-market domains from the search plugin is
+                the narrow repair, and it is the one worth trying — but it changes the
+                data-generating process, so it splits the dataset in two and every comparison across
+                the boundary becomes suspect. That is a decision about the experiment, not a bug fix.
               </p>
             </Prose>
           </Section>

@@ -156,9 +156,36 @@ export interface LeadLag {
   bootstrapSamples: number;
 }
 
+export interface LeakStratum {
+  label: string;
+  n: number;
+  ensemble: number;
+  crowd: number;
+  skill: number;
+}
+
+export interface Leakage {
+  nForecasts: number;
+  nLeaked: number;
+  leakPct: number;
+  perModel: { id: string; name: string; emoji: string; color: string; n: number; leak: number; pct: number }[];
+  /** Within-market: mean(|leaky − price|) − mean(|clean − price|). Negative = pulled toward the price. */
+  withinDiff: number;
+  withinLo: number;
+  withinHi: number;
+  withinMarkets: number;
+  withinGroups: number;
+  withinSignificant: boolean;
+  /** Share landing within half a point of the price, vs a shuffled-price baseline. */
+  copyPct: number;
+  copyBaselinePct: number;
+  strata: LeakStratum[];
+}
+
 export interface DataArticle {
   corpus: CorpusStats;
   leadLag: LeadLag | null;
+  leakage: Leakage | null;
   byCategory: CategoryRow[];
   byHorizon: HorizonRow[];
   bySpread: SpreadRow[];
@@ -824,21 +851,196 @@ async function getLeadLag(): Promise<LeadLag | null> {
 }
 
 // ---------------------------------------------------------------------------
+// 8. Price leakage: are the "blind" forecasts actually blind?
+//
+// The prompt withholds the market price, but the models run a live web search,
+// and Exa indexes Polymarket, Kalshi and the sites that quote them. So a model
+// can read the price it was never told. This measures how often that happens
+// and what it does to the numbers.
+//
+// The load-bearing test is WITHIN-MARKET: on the same market, in the same
+// round, against the same price, do the forecasts whose reasoning cites market
+// odds sit closer to that price than the ones that don't? Comparing leaky and
+// clean forecasts across different markets would confound leakage with
+// difficulty; holding the market fixed removes that entirely.
+// ---------------------------------------------------------------------------
+
+// Names a venue or explicitly cites market-implied odds. Deliberately narrow:
+// "stock market" and "market cap" must not match, or the rate is meaningless.
+//
+// Evaluated in SQL rather than in JS: the alternative is shipping ~10k rows of
+// reasoning prose out of Turso on every request, which dominated the page's
+// load time. These LIKE patterns are exactly the literal alternatives of the
+// original regex.
+const LEAK_TERMS = [
+  "polymarket", "kalshi", "metaculus", "predictit", "betfair", "smarkets",
+  "prediction market", "betting market", "implied probabilit",
+  "market-implied", "market implied", "bookmaker", "betting odds", "wagering",
+];
+const LEAK_SQL = `(${LEAK_TERMS.map(
+  (t) => `lower(coalesce(reasoning,'') || ' ' || coalesce(key_factors,'')) LIKE '%${t}%'`,
+).join(" OR ")})`;
+
+const COPY_EPS = 0.005; // "the same number as the price", to half a point
+
+interface LeakRow {
+  round_id: string;
+  market_id: string;
+  forecaster_id: string;
+  prob_yes: number;
+  crowd_price: number;
+  leak: number; // 1/0, computed in SQL
+  settled: number;
+  outcome: number | null;
+}
+
+async function getLeakage(): Promise<Leakage | null> {
+  const raw = await queryAll<LeakRow>(
+    `SELECT round_id, market_id, forecaster_id, prob_yes, crowd_price, settled, outcome,
+            CASE WHEN ${LEAK_SQL} THEN 1 ELSE 0 END AS leak
+     FROM forecasts
+     WHERE ok = 1 AND forecaster_kind = 'model'
+       AND prob_yes IS NOT NULL AND crowd_price IS NOT NULL`,
+  );
+  if (raw.length < 50) return null;
+
+  const rows = raw.map((r) => ({
+    ...r,
+    leak: r.leak === 1,
+    dist: Math.abs(r.prob_yes - r.crowd_price),
+  }));
+
+  const nLeaked = rows.filter((r) => r.leak).length;
+
+  const perModelMap = new Map<string, { n: number; leak: number }>();
+  for (const r of rows) {
+    const g = perModelMap.get(r.forecaster_id) ?? { n: 0, leak: 0 };
+    g.n += 1;
+    if (r.leak) g.leak += 1;
+    perModelMap.set(r.forecaster_id, g);
+  }
+  const perModel = [...perModelMap.entries()]
+    .map(([id, g]) => {
+      const meta = forecasterMeta(id);
+      return { id, name: meta.name, emoji: meta.emoji, color: meta.color, n: g.n, leak: g.leak, pct: g.leak / g.n };
+    })
+    .sort((a, b) => b.pct - a.pct);
+
+  // --- within-market paired comparison ---
+  const groups = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const k = `${r.round_id}|${r.market_id}`;
+    const g = groups.get(k);
+    if (g) g.push(r);
+    else groups.set(k, [r]);
+  }
+  const paired: { market: string; diff: number }[] = [];
+  for (const [k, g] of groups) {
+    const lk = g.filter((r) => r.leak);
+    const cl = g.filter((r) => !r.leak);
+    if (!lk.length || !cl.length) continue;
+    paired.push({
+      market: k.split("|")[1],
+      diff: mean(lk.map((r) => r.dist)) - mean(cl.map((r) => r.dist)),
+    });
+  }
+
+  let withinDiff = 0;
+  let withinLo = 0;
+  let withinHi = 0;
+  let withinMarkets = 0;
+  if (paired.length >= 5) {
+    withinDiff = mean(paired.map((p) => p.diff));
+    const byMkt = new Map<string, typeof paired>();
+    for (const p of paired) {
+      const a = byMkt.get(p.market);
+      if (a) a.push(p);
+      else byMkt.set(p.market, [p]);
+    }
+    const blocks = [...byMkt.values()];
+    withinMarkets = blocks.length;
+    if (blocks.length >= 4) {
+      const rng = makeRng(0x1ea71);
+      const ms: number[] = [];
+      for (let b = 0; b < 2000; b++) {
+        const s: { market: string; diff: number }[] = [];
+        for (let i = 0; i < blocks.length; i++) s.push(...blocks[(rng() * blocks.length) | 0]);
+        ms.push(mean(s.map((p) => p.diff)));
+      }
+      ms.sort((a, b) => a - b);
+      withinLo = ms[Math.floor(0.025 * ms.length)];
+      withinHi = ms[Math.floor(0.975 * ms.length)];
+    }
+  }
+
+  // --- outright copying, against a shuffled-price chance baseline ---
+  const nCopy = rows.filter((r) => r.dist <= COPY_EPS).length;
+  const prices = rows.map((r) => r.crowd_price);
+  let nChance = 0;
+  for (let i = 0; i < rows.length; i++) {
+    // Deterministic stride pairs each forecast with an unrelated market's price.
+    if (Math.abs(rows[i].prob_yes - prices[(i * 7919 + 13) % prices.length]) <= COPY_EPS) nChance += 1;
+  }
+
+  // --- does the arena's headline gap depend on leakage? ---
+  const stratum = (label: string, keep: (g: typeof rows) => boolean): LeakStratum | null => {
+    const cases: { ens: number; crowd: number }[] = [];
+    for (const [, g] of groups) {
+      const s = g.filter((r) => r.settled === 1 && r.outcome != null);
+      if (s.length < 3 || !keep(s)) continue;
+      const y = s[0].outcome as number;
+      cases.push({
+        ens: (mean(s.map((r) => r.prob_yes)) - y) ** 2,
+        crowd: (s[0].crowd_price - y) ** 2,
+      });
+    }
+    if (cases.length < 5) return null;
+    const ensemble = mean(cases.map((c) => c.ens));
+    const crowd = mean(cases.map((c) => c.crowd));
+    return { label, n: cases.length, ensemble, crowd, skill: crowd - ensemble };
+  };
+
+  const strata = [
+    stratum("No model cited a market", (g) => g.every((r) => !r.leak)),
+    stratum("Some did, some didn't", (g) => g.some((r) => r.leak) && g.some((r) => !r.leak)),
+    stratum("Every model cited a market", (g) => g.every((r) => r.leak)),
+  ].filter((s): s is LeakStratum => s != null);
+
+  return {
+    nForecasts: rows.length,
+    nLeaked,
+    leakPct: nLeaked / rows.length,
+    perModel,
+    withinDiff,
+    withinLo,
+    withinHi,
+    withinMarkets,
+    withinGroups: paired.length,
+    withinSignificant: paired.length >= 5 && (withinLo > 0 || withinHi < 0),
+    copyPct: nCopy / rows.length,
+    copyBaselinePct: nChance / rows.length,
+    strata,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 export async function getDataArticle(): Promise<DataArticle> {
   const rows = await fetchScoredJoin();
   const cases = buildCases(rows);
-  const [corpus, { ops, failures }, leadLag] = await Promise.all([
+  const [corpus, { ops, failures }, leadLag, leakage] = await Promise.all([
     getCorpus(cases),
     getOps(),
     getLeadLag(),
+    getLeakage(),
   ]);
 
   return {
     corpus,
     leadLag,
+    leakage,
     byCategory: getByCategory(cases),
     byHorizon: getByHorizon(cases),
     bySpread: getBySpread(cases),
