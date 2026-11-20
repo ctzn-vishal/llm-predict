@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { withBase } from "@/lib/base-path";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loader2, Swords, CheckCircle2, AlertCircle } from "lucide-react";
@@ -13,7 +14,7 @@ export function ArenaControls() {
     setStatus("running");
     setResult("");
     try {
-      const res = await fetch("/api/rounds", { method: "POST" });
+      const res = await fetch(withBase("/api/rounds"), { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error ?? "Failed to start round");

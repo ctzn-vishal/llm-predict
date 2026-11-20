@@ -172,6 +172,8 @@ Markets carry a `resolved` code: `0` = open, `1` = YES, `2` = NO, `3` = voided. 
 
 ## Automation & Budget Cap
 
+The app is served under the basePath `/llm-arena` (it is mounted at vishalsingh.org/llm-arena), so in production every page, API and cron path below carries that prefix: `GET /llm-arena/api/cron/round` and so on. Unprefixed paths redirect.
+
 Three Vercel Cron jobs (`vercel.json`) run everything hands-off. Each cron endpoint requires an `Authorization: Bearer $CRON_SECRET` header (Vercel sets this automatically).
 
 | Cron Job | Schedule | Endpoint | What It Does |

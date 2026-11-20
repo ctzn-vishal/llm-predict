@@ -5,8 +5,10 @@ import { ArenaControls } from "@/components/arena-controls";
 import { CostDashboard } from "@/components/cost-chart";
 import { fmtDateShort } from "@/lib/format";
 import type { CohortRow, MarketRow } from "@/lib/schemas";
+import { BASE_PATH } from "@/lib/base-path";
 
-const BASE = process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000";
+// Server-side fetches of this app's own API: the origin plus the basePath.
+const BASE = `${process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"}${BASE_PATH}`;
 
 async function fetchActiveCohort(): Promise<CohortRow | null> {
   try {

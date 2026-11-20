@@ -1,9 +1,10 @@
 import { MarketCard } from "@/components/market-card";
 import type { MarketRow } from "@/lib/schemas";
+import { BASE_PATH } from "@/lib/base-path";
 
 async function fetchMarkets(): Promise<MarketRow[]> {
   try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"}/api/markets`, {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000"}${BASE_PATH}/api/markets`, {
       cache: "no-store",
     });
     if (!res.ok) return [];

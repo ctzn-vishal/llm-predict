@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { withBase } from "@/lib/base-path";
 import { Separator } from "@/components/ui/separator";
 
 export default function MethodologyPage() {
@@ -147,7 +148,7 @@ export default function MethodologyPage() {
             </code>
             . The 80/20 split and the log-odds scale come from a backtest on the arena&apos;s own
             settled forecasts (see{" "}
-            <a href="/insights" className="text-primary hover:underline">
+            <a href={withBase("/insights")} className="text-primary hover:underline">
               Findings
             </a>
             ), where this blend scored a better Brier than the market price alone. Its job on the

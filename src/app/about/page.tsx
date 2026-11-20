@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { withBase } from "@/lib/base-path";
 import { Separator } from "@/components/ui/separator";
 import { MODELS_ONLY } from "@/lib/models";
 
@@ -69,7 +70,7 @@ export default function AboutPage() {
               <strong className="text-foreground">The prompt never contains the market price</strong>
               , because a model that could peek at the price could just echo it, and an ensemble of
               price-echoers would teach us nothing.{" "}
-              <a href="/data" className="text-primary hover:underline">
+              <a href={withBase("/data")} className="text-primary hover:underline">
                 Measured after the fact
               </a>
               , though, the blinding is leaky: models research with live web search, prediction-market

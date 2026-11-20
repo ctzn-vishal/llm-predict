@@ -1,4 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
+import { withBase } from "@/lib/base-path";
 import { EnsembleComparisonChart } from "@/components/ensemble-comparison-chart";
 import { EnsembleSizeChart } from "@/components/ensemble-size-chart";
 import { CorrelationHeatmap } from "@/components/correlation-heatmap";
@@ -138,7 +139,7 @@ export default async function AnalysisPage() {
             whether a crowd of <em>language models</em> can do the same job, and whether their
             blind, independent forecasts pooled together rival the market that has money on the
             line. See the{" "}
-            <a href="/methodology" className="text-primary hover:underline">
+            <a href={withBase("/methodology")} className="text-primary hover:underline">
               methodology
             </a>{" "}
             for exactly how each number is computed.

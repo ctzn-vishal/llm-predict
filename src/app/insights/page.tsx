@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { withBase } from "@/lib/base-path";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   BiasChart,
@@ -251,7 +252,7 @@ export default async function InsightsPage() {
             hasn&apos;t priced?&quot; The data says: a little, reliably enough to measure.
             The <Link href="/" className="text-primary hover:underline">leaderboard</Link> now
             tracks that claim in real time, and the{" "}
-            <a href="/methodology" className="text-primary hover:underline">methodology</a>{" "}
+            <a href={withBase("/methodology")} className="text-primary hover:underline">methodology</a>{" "}
             page explains every metric.
           </p>
         </CardContent>

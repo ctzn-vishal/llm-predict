@@ -1,15 +1,15 @@
 {
   "crons": [
     {
-      "path": "/api/cron/round",
+      "path": "/llm-arena/api/cron/round",
       "schedule": "0 10,22 * * *"
     },
     {
-      "path": "/api/cron/settle",
+      "path": "/llm-arena/api/cron/settle",
       "schedule": "0 */4 * * *"
     },
     {
-      "path": "/api/cron/cohort",
+      "path": "/llm-arena/api/cron/cohort",
       "schedule": "0 0 * * 1"
     }
   ]
